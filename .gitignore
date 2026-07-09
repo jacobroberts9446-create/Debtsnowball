@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+
+# VS Code
+.vscode/
+
+# Generated files
+output/
+history/
+
+# SQLite
+*.db
