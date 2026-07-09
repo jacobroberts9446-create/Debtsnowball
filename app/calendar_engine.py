@@ -1,28 +1,35 @@
 """
 calendar_engine.py
 
-Generates every paycheck for the year.
+Generates all paycheck periods.
 """
 
 from datetime import timedelta
+
+from app.models import PayPeriod
 
 
 class CalendarEngine:
 
     def __init__(self, settings):
-
         self.settings = settings
 
-    def generate_paychecks(self, end_date):
+    def generate(self, end_date):
 
-        paychecks = []
+        periods = []
 
-        current = self.settings.first_paycheck
+        pay_date = self.settings.first_paycheck
 
-        while current <= end_date:
+        while pay_date <= end_date:
 
-            paychecks.append(current)
+            period = PayPeriod(
+                pay_date=pay_date,
+                start_date=pay_date,
+                end_date=pay_date + timedelta(days=13)
+            )
 
-            current += timedelta(days=14)
+            periods.append(period)
 
-        return paychecks
+            pay_date += timedelta(days=14)
+
+        return periods

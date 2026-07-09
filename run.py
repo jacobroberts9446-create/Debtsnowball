@@ -1,8 +1,13 @@
+"""
+run.py
+
+DebtSnowball
+"""
+
 from datetime import date
 
 from app.calendar_engine import CalendarEngine
 from app.config import Config
-from app.scheduler import Scheduler
 
 
 def main():
@@ -10,48 +15,32 @@ def main():
     config = Config()
     config.load()
 
-    calendar = CalendarEngine(config.settings)
+    calendar = CalendarEngine(
+        config.settings
+    )
 
-    scheduler = Scheduler(config)
-
-    paychecks = calendar.generate_paychecks(
+    periods = calendar.generate(
         date(2026, 12, 31)
     )
 
-    print("=" * 60)
-    print("DebtSnowball v0.1")
-    print("=" * 60)
+    print()
 
-    for pay_date in paychecks:
+    print("=" * 70)
+    print("DebtSnowball v0.2")
+    print("=" * 70)
 
-        print()
-        print("-" * 60)
-        print(pay_date.strftime("%B %d, %Y"))
-        print("-" * 60)
+    print()
 
-        bills = scheduler.bills_for_paycheck(
-            pay_date
-        )
+    print(f"{'Pay Date':15} {'Period'}")
 
-        if not bills:
+    print("-" * 70)
 
-            print("No bills due.")
-            continue
-
-        total = 0
-
-        for bill in bills:
-
-            print(
-                f"{bill['name']:<20} ${bill['amount']:>8.2f}"
-            )
-
-            total += bill["amount"]
-
-        print()
+    for period in periods:
 
         print(
-            f"{'TOTAL':<20} ${total:>8.2f}"
+            f"{period.pay_date:%b %d, %Y}   "
+            f"{period.start_date:%b %d} -> "
+            f"{period.end_date:%b %d}"
         )
 
 
