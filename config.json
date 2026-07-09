@@ -1,0 +1,71 @@
+{
+  "budget": {
+    "paycheck": 2234.00,
+    "first_paycheck": "2026-07-17",
+    "rent_per_paycheck": 100.00,
+    "insurance_per_paycheck": 66.00,
+    "personal_per_paycheck": 600.00,
+    "starting_savings": 1500.00,
+    "savings_goal": 5400.00,
+    "snowball_split": 0.50
+  },
+
+  "bills": [
+    {
+      "name": "Phone",
+      "amount": 158.00,
+      "due_day": 12
+    }
+  ],
+
+  "debts": [
+    {
+      "name": "Citi",
+      "balance": 1880.00,
+      "apr": 27.24,
+      "minimum": 67.00,
+      "due_day": 9,
+      "snowball_order": 1
+    },
+    {
+      "name": "Ollo",
+      "balance": 960.00,
+      "apr": 29.99,
+      "minimum": 27.00,
+      "due_day": 9,
+      "snowball_order": 2
+    },
+    {
+      "name": "Lending USA",
+      "balance": 17506.00,
+      "apr": 25.96,
+      "minimum": 584.00,
+      "due_day": 18,
+      "snowball_order": 3
+    },
+    {
+      "name": "Co-op",
+      "balance": 1431.00,
+      "apr": 18.00,
+      "minimum": 46.00,
+      "due_day": 9,
+      "snowball_order": 4
+    },
+    {
+      "name": "Car",
+      "balance": 12505.00,
+      "apr": 4.29,
+      "minimum": 454.00,
+      "due_day": 25,
+      "snowball_order": 5
+    },
+    {
+      "name": "Capital One",
+      "balance": 2934.00,
+      "apr": 0.00,
+      "minimum": 33.00,
+      "due_day": 10,
+      "snowball_order": 6
+    }
+  ]
+}
