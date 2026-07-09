@@ -8,6 +8,7 @@ from datetime import date
 
 from app.calendar_engine import CalendarEngine
 from app.config import Config
+from app.scheduler import Scheduler
 
 
 def main():
@@ -19,9 +20,10 @@ def main():
         config.settings
     )
 
-    periods = calendar.generate(
-        date(2026, 12, 31)
-    )
+    periods = calendar.generate(date(2026, 12, 31))
+
+    scheduler = Scheduler(config)
+    schedule = scheduler.schedule_for_periods(periods)
 
     print()
 
@@ -31,16 +33,23 @@ def main():
 
     print()
 
-    print(f"{'Pay Date':15} {'Period'}")
+    print(f"{'Pay Date':15} {'Scheduled Payments'}")
 
     print("-" * 70)
 
     for period in periods:
+        payments = schedule[period.pay_date]
+        if payments:
+            scheduled = "; ".join(
+                f"{payment.name} ${payment.amount:,.2f} due {payment.due_date:%b %d, %Y}"
+                for payment in payments
+            )
+        else:
+            scheduled = "No scheduled payments"
 
         print(
             f"{period.pay_date:%b %d, %Y}   "
-            f"{period.start_date:%b %d} -> "
-            f"{period.end_date:%b %d}"
+            f"{scheduled}"
         )
 
 

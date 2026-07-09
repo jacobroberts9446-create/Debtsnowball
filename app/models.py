@@ -19,6 +19,12 @@ class Bill:
     amount: float
     due_day: int
 
+    def __post_init__(self):
+        self.amount = round(float(self.amount), 2)
+        if not 1 <= int(self.due_day) <= 31:
+            raise ValueError(f"{self.name} due_day must be between 1 and 31.")
+        self.due_day = int(self.due_day)
+
 
 # --------------------------------------------------
 # Debt
@@ -36,6 +42,22 @@ class Debt:
     total_interest_paid: float = 0.0
     total_paid: float = 0.0
 
+    def __post_init__(self):
+        self.balance = round(float(self.balance), 2)
+        self.apr = float(self.apr)
+        self.minimum = round(float(self.minimum), 2)
+        self.due_day = int(self.due_day)
+        self.snowball_order = int(self.snowball_order)
+
+        if self.balance < 0:
+            raise ValueError(f"{self.name} balance cannot be negative.")
+        if self.apr < 0:
+            raise ValueError(f"{self.name} apr cannot be negative.")
+        if self.minimum < 0:
+            raise ValueError(f"{self.name} minimum cannot be negative.")
+        if not 1 <= self.due_day <= 31:
+            raise ValueError(f"{self.name} due_day must be between 1 and 31.")
+
     @property
     def active(self) -> bool:
         return self.balance > 0.01
@@ -43,6 +65,10 @@ class Debt:
     @property
     def rate_per_paycheck(self) -> float:
         return (self.apr / 100) / 26
+
+    @property
+    def payoff_status(self) -> str:
+        return "paid" if not self.active else "active"
 
     def add_interest(self) -> float:
         if not self.active:
@@ -66,6 +92,7 @@ class Debt:
         if self.balance < 0.01:
             self.balance = 0.0
 
+        self.balance = round(self.balance, 2)
         return round(payment, 2)
 
 
@@ -86,6 +113,20 @@ class BudgetSettings:
     savings_goal: float
 
     snowball_split: float
+
+    def __post_init__(self):
+        self.paycheck = round(float(self.paycheck), 2)
+        self.rent_per_paycheck = round(float(self.rent_per_paycheck), 2)
+        self.insurance_per_paycheck = round(float(self.insurance_per_paycheck), 2)
+        self.personal_per_paycheck = round(float(self.personal_per_paycheck), 2)
+        self.starting_savings = round(float(self.starting_savings), 2)
+        self.savings_goal = round(float(self.savings_goal), 2)
+        self.snowball_split = float(self.snowball_split)
+
+        if self.paycheck < 0:
+            raise ValueError("paycheck cannot be negative.")
+        if not 0 <= self.snowball_split <= 1:
+            raise ValueError("snowball_split must be between 0 and 1.")
 
 
 # --------------------------------------------------
