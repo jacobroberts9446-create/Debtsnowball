@@ -1,116 +1,179 @@
 """
 budget_engine.py
 
-Builds a paycheck-by-paycheck budget plan.
+Coordinates scheduled bills, debt payments, savings, and snowball payments
+for each pay period.
 """
 
+from dataclasses import dataclass
+from datetime import date
+
 from app.debt_engine import DebtEngine
-from app.models import Paycheck, Savings
 from app.scheduler import Scheduler
 
 
+@dataclass
+class DebtBalance:
+    """Snapshot of a debt after a pay period is processed."""
+
+    name: str
+    balance: float
+    minimum: float
+    status: str
+
+
+@dataclass
+class PayPeriodSummary:
+    """Budget result for one pay period."""
+
+    pay_date: date
+    start_date: date
+    end_date: date
+    income: float
+    bills_paid: float
+    debt_minimums: float
+    snowball_payment: float
+    savings_contribution: float
+    savings_balance: float
+    savings_goal: float
+    remaining_cash: float
+    active_debt_balances: list[DebtBalance]
+    paid_off_debts: list[DebtBalance]
+
+
 class BudgetEngine:
+    """Builds pay-period budget summaries from project configuration."""
+
     def __init__(self, config):
         self.config = config
         self.settings = config.settings
         self.scheduler = Scheduler(config)
         self.debt_engine = DebtEngine(config.debts)
-        self.savings = Savings(
-            current_balance=self.settings.starting_savings,
-            goal=self.settings.savings_goal,
+        self.savings_balance = round(float(self.settings.starting_savings), 2)
+
+    def build_plan(self, periods) -> list[PayPeriodSummary]:
+        """Process each pay period and return budget summaries."""
+        return [self.process_pay_period(period) for period in periods]
+
+    def process_pay_period(self, period) -> PayPeriodSummary:
+        """Process scheduled payments, savings, and debt snowball for one period."""
+        scheduled_payments = self.scheduler.payments_for_period(period)
+        bills_paid = self._scheduled_bill_total(scheduled_payments)
+        reserved_minimums = self._scheduled_debt_minimum_total(scheduled_payments)
+        surplus = self._surplus_after_required_payments(
+            bills_paid=bills_paid,
+            debt_minimums=reserved_minimums,
         )
 
-    def build_plan(self, periods):
-        paychecks = []
+        savings_contribution, snowball_amount = self._split_surplus(surplus)
+        debt_engine_snowball = self._debt_engine_snowball_amount(snowball_amount)
+        debt_result = self.debt_engine.process_pay_period(
+            scheduled_payments=scheduled_payments,
+            snowball_amount=debt_engine_snowball,
+        )
 
-        for period in periods:
-            paycheck = Paycheck(
-                pay_date=period.pay_date,
-                income=self.settings.paycheck,
+        debt_minimums_paid = round(sum(debt_result["minimums"].values()), 2)
+        snowball_paid = round(sum(debt_result["snowball"].values()), 2)
+        remaining_cash = self._remaining_cash(
+            bills_paid=bills_paid,
+            debt_minimums=debt_minimums_paid,
+            savings_contribution=savings_contribution,
+            snowball_payment=snowball_paid,
+        )
+
+        return PayPeriodSummary(
+            pay_date=period.pay_date,
+            start_date=period.start_date,
+            end_date=period.end_date,
+            income=self.settings.paycheck,
+            bills_paid=bills_paid,
+            debt_minimums=debt_minimums_paid,
+            snowball_payment=snowball_paid,
+            savings_contribution=savings_contribution,
+            savings_balance=self.savings_balance,
+            savings_goal=self.settings.savings_goal,
+            remaining_cash=remaining_cash,
+            active_debt_balances=self._debt_balances(debt_result["active_debts"]),
+            paid_off_debts=self._debt_balances(debt_result["paid_off_debts"]),
+        )
+
+    def _scheduled_bill_total(self, scheduled_payments) -> float:
+        """Return scheduled non-debt bill total for the pay period."""
+        return round(
+            sum(
+                payment.amount
+                for payment in scheduled_payments
+                if payment.payment_type != "debt"
+            ),
+            2,
+        )
+
+    def _scheduled_debt_minimum_total(self, scheduled_payments) -> float:
+        """Return scheduled debt minimum total for the pay period."""
+        return round(
+            sum(
+                payment.amount
+                for payment in scheduled_payments
+                if payment.payment_type == "debt"
+            ),
+            2,
+        )
+
+    def _surplus_after_required_payments(
+        self,
+        bills_paid: float,
+        debt_minimums: float,
+    ) -> float:
+        """Return cash left after bills and reserved debt minimums."""
+        return round(max(self.settings.paycheck - bills_paid - debt_minimums, 0.0), 2)
+
+    def _split_surplus(self, surplus: float) -> tuple[float, float]:
+        """Apply the savings rule and return savings and snowball amounts."""
+        if surplus <= 0:
+            return 0.0, 0.0
+
+        if self.savings_balance >= self.settings.savings_goal:
+            return 0.0, round(surplus, 2)
+
+        savings_needed = round(self.settings.savings_goal - self.savings_balance, 2)
+        savings_contribution = min(round(surplus * 0.50, 2), savings_needed)
+        self.savings_balance = round(self.savings_balance + savings_contribution, 2)
+        snowball_amount = round(surplus - savings_contribution, 2)
+
+        return savings_contribution, snowball_amount
+
+    def _debt_engine_snowball_amount(self, snowball_amount: float) -> float:
+        """Return the snowball amount to pass before debt-engine rollover is added."""
+        return round(
+            max(snowball_amount - self.debt_engine.freed_minimum_payment, 0.0),
+            2,
+        )
+
+    def _remaining_cash(
+        self,
+        bills_paid: float,
+        debt_minimums: float,
+        savings_contribution: float,
+        snowball_payment: float,
+    ) -> float:
+        """Return cash left after all budgeted outflows."""
+        return round(
+            self.settings.paycheck
+            - bills_paid
+            - debt_minimums
+            - savings_contribution
+            - snowball_payment,
+            2,
+        )
+
+    def _debt_balances(self, debts) -> list[DebtBalance]:
+        """Convert debt engine snapshots to debt balance dataclasses."""
+        return [
+            DebtBalance(
+                name=debt["name"],
+                balance=round(debt["balance"], 2),
+                minimum=round(debt["minimum"], 2),
+                status=debt["status"],
             )
-
-            scheduled = self.scheduler.payments_for_period(period)
-            debt_names_due = {
-                item.name
-                for item in scheduled
-                if item.payment_type == "debt"
-            }
-
-            interest = self.debt_engine.accrue_interest()
-            minimums = self.debt_engine.pay_due_minimums(debt_names_due)
-
-            paycheck.bills_paid = round(
-                self.settings.rent_per_paycheck
-                + self.settings.insurance_per_paycheck
-                + sum(item.amount for item in scheduled if item.payment_type == "bill"),
-                2,
-            )
-            paycheck.debt_minimums = round(sum(minimums.values()), 2)
-
-            fixed_outflow = round(
-                paycheck.bills_paid
-                + paycheck.debt_minimums
-                + self.settings.personal_per_paycheck,
-                2,
-            )
-            available = round(paycheck.income - fixed_outflow, 2)
-
-            if available < 0:
-                paycheck.notes.append(
-                    f"Shortfall before snowball/savings: ${abs(available):,.2f}"
-                )
-                available = 0.0
-
-            snowball_budget = round(available * self.settings.snowball_split, 2)
-            snowball_payments, snowball_leftover = self.debt_engine.apply_snowball(
-                snowball_budget
-            )
-            paycheck.snowball_payment = round(sum(snowball_payments.values()), 2)
-
-            savings_amount = round(
-                available - snowball_budget + snowball_leftover,
-                2,
-            )
-            if not self.savings.goal_met and savings_amount > 0:
-                needed = round(self.savings.goal - self.savings.current_balance, 2)
-                savings_amount = min(savings_amount, needed)
-                self.savings.add(savings_amount)
-            else:
-                savings_amount = 0.0
-
-            paycheck.savings_added = round(savings_amount, 2)
-            paycheck.checking_remaining = round(
-                paycheck.income
-                - paycheck.bills_paid
-                - paycheck.debt_minimums
-                - paycheck.snowball_payment
-                - paycheck.savings_added
-                - self.settings.personal_per_paycheck,
-                2,
-            )
-
-            self._add_notes(paycheck, scheduled, interest, minimums, snowball_payments)
-            paychecks.append(paycheck)
-
-        return paychecks
-
-    def _add_notes(self, paycheck, scheduled, interest, minimums, snowball_payments):
-        if scheduled:
-            names = ", ".join(item.name for item in scheduled)
-            paycheck.notes.append(f"Scheduled: {names}")
-
-        interest_total = round(sum(interest.values()), 2)
-        if interest_total:
-            paycheck.notes.append(f"Interest accrued: ${interest_total:,.2f}")
-
-        if minimums:
-            total = round(sum(minimums.values()), 2)
-            paycheck.notes.append(f"Debt minimums paid: ${total:,.2f}")
-
-        if snowball_payments:
-            target = next(iter(snowball_payments))
-            total = round(sum(snowball_payments.values()), 2)
-            paycheck.notes.append(f"Snowball paid to {target}: ${total:,.2f}")
-
-    def debt_summary(self):
-        return self.debt_engine.summary()
+            for debt in debts
+        ]

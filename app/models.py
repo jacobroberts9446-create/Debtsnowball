@@ -13,6 +13,7 @@ from typing import List
 # Bill
 # --------------------------------------------------
 
+
 @dataclass
 class Bill:
     name: str
@@ -29,6 +30,7 @@ class Bill:
 # --------------------------------------------------
 # Debt
 # --------------------------------------------------
+
 
 @dataclass
 class Debt:
@@ -100,6 +102,7 @@ class Debt:
 # Budget Settings
 # --------------------------------------------------
 
+
 @dataclass
 class BudgetSettings:
     paycheck: float
@@ -133,6 +136,7 @@ class BudgetSettings:
 # Scheduled Payment
 # --------------------------------------------------
 
+
 @dataclass
 class ScheduledPayment:
     name: str
@@ -145,6 +149,7 @@ class ScheduledPayment:
 # Pay Period
 # --------------------------------------------------
 
+
 @dataclass
 class PayPeriod:
     pay_date: date
@@ -155,6 +160,7 @@ class PayPeriod:
 # --------------------------------------------------
 # Paycheck
 # --------------------------------------------------
+
 
 @dataclass
 class Paycheck:
@@ -173,6 +179,7 @@ class Paycheck:
 # --------------------------------------------------
 # Savings
 # --------------------------------------------------
+
 
 @dataclass
 class Savings:

@@ -6,9 +6,10 @@ DebtSnowball
 
 from datetime import date
 
+from app.budget_engine import BudgetEngine
 from app.calendar_engine import CalendarEngine
 from app.config import Config
-from app.scheduler import Scheduler
+from app.excel_writer import ExcelWriter
 
 
 def main():
@@ -16,41 +17,48 @@ def main():
     config = Config()
     config.load()
 
-    calendar = CalendarEngine(
-        config.settings
-    )
+    calendar = CalendarEngine(config.settings)
 
     periods = calendar.generate(date(2026, 12, 31))
 
-    scheduler = Scheduler(config)
-    schedule = scheduler.schedule_for_periods(periods)
+    budget = BudgetEngine(config)
+    summaries = budget.build_plan(periods)
+    workbook_path = ExcelWriter().write(summaries)
 
     print()
 
     print("=" * 70)
-    print("DebtSnowball v0.2")
+    print("DebtSnowball v1.0.0")
     print("=" * 70)
 
     print()
 
-    print(f"{'Pay Date':15} {'Scheduled Payments'}")
-
+    print("Budget plan")
     print("-" * 70)
 
-    for period in periods:
-        payments = schedule[period.pay_date]
-        if payments:
-            scheduled = "; ".join(
-                f"{payment.name} ${payment.amount:,.2f} due {payment.due_date:%b %d, %Y}"
-                for payment in payments
-            )
-        else:
-            scheduled = "No scheduled payments"
-
+    for summary in summaries:
         print(
-            f"{period.pay_date:%b %d, %Y}   "
-            f"{scheduled}"
+            f"Pay Period: {summary.start_date:%b %d, %Y} "
+            f"to {summary.end_date:%b %d, %Y}"
         )
+        print(f"  Income:          ${summary.income:,.2f}")
+        print(f"  Bills:           ${summary.bills_paid:,.2f}")
+        print(f"  Debt Minimums:   ${summary.debt_minimums:,.2f}")
+        print(f"  Savings Deposit: ${summary.savings_contribution:,.2f}")
+        print(f"  Snowball Payment: ${summary.snowball_payment:,.2f}")
+        print(f"  Remaining Cash:  ${summary.remaining_cash:,.2f}")
+        print("  Debt Balances:")
+
+        for debt in summary.active_debt_balances:
+            print(f"    {debt.name:<15} ${debt.balance:,.2f}")
+
+        if summary.paid_off_debts:
+            paid_off = ", ".join(debt.name for debt in summary.paid_off_debts)
+            print(f"  Paid Off: {paid_off}")
+
+        print()
+
+    print(f"Workbook created: {workbook_path}")
 
 
 if __name__ == "__main__":
