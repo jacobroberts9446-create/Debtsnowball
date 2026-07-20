@@ -194,7 +194,7 @@ Current coverage: **97%**
 | Version | Status | Focus |
 | --- | --- | --- |
 | Version 1.0 ✅ | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
-| Version 2 🚧 | Planned | Forecasting, configurable forecast horizon, payoff timeline reporting, and scenario comparison. |
+| Version 2 🚧 | In development | Forecast Engine, configurable forecast horizon, payoff timeline reporting, and scenario comparison. |
 | Version 3 🔮 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
 
 ---

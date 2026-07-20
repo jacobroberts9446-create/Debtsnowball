@@ -6,6 +6,7 @@ Core data models used throughout DebtSnowball.
 
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 from typing import List
 
 
@@ -192,3 +193,45 @@ class Savings:
     @property
     def goal_met(self) -> bool:
         return self.current_balance >= self.goal
+
+
+@dataclass
+class DebtPayoffForecast:
+    """Forecasted payoff details for a single debt."""
+
+    debt_name: str
+    starting_balance: Decimal
+    payoff_date: date | None
+    total_interest_paid: Decimal
+    total_paid: Decimal
+
+
+@dataclass
+class ForecastPeriod:
+    """Forecasted account state after one paycheck."""
+
+    paycheck_date: date
+    total_debt_balance: Decimal
+    savings_balance: Decimal
+    interest_paid: Decimal
+    minimums_paid: Decimal
+    snowball_paid: Decimal
+
+
+@dataclass
+class ForecastSummary:
+    """Forecast result for a full simulated payoff horizon."""
+
+    forecast_start_date: date
+    forecast_end_date: date
+    debt_free_date: date | None
+    savings_goal_date: date | None
+    starting_debt: Decimal
+    total_interest_paid: Decimal
+    total_minimum_payments: Decimal
+    total_snowball_payments: Decimal
+    ending_savings: Decimal
+    remaining_debt: Decimal
+    completed: bool
+    debt_payoffs: list[DebtPayoffForecast] = field(default_factory=list)
+    periods: list[ForecastPeriod] = field(default_factory=list)

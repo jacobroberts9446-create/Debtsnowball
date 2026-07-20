@@ -98,13 +98,24 @@ class BudgetEngine:
         )
 
     def _scheduled_bill_total(self, scheduled_payments) -> float:
-        """Return scheduled non-debt bill total for the pay period."""
+        """Return fixed expenses plus scheduled non-debt bills for the pay period."""
         return round(
+            self._fixed_expense_total()
+            +
             sum(
                 payment.amount
                 for payment in scheduled_payments
                 if payment.payment_type != "debt"
             ),
+            2,
+        )
+
+    def _fixed_expense_total(self) -> float:
+        """Return configured expenses that are reserved every paycheck."""
+        return round(
+            self.settings.rent_per_paycheck
+            + self.settings.insurance_per_paycheck
+            + self.settings.personal_per_paycheck,
             2,
         )
 

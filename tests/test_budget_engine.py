@@ -9,6 +9,9 @@ def make_config(
     paycheck=1000,
     starting_savings=0,
     savings_goal=1000,
+    rent_per_paycheck=0,
+    insurance_per_paycheck=0,
+    personal_per_paycheck=0,
     bills=None,
     debts=None,
 ):
@@ -16,9 +19,9 @@ def make_config(
         settings=BudgetSettings(
             paycheck=paycheck,
             first_paycheck=date(2026, 1, 1),
-            rent_per_paycheck=0,
-            insurance_per_paycheck=0,
-            personal_per_paycheck=0,
+            rent_per_paycheck=rent_per_paycheck,
+            insurance_per_paycheck=insurance_per_paycheck,
+            personal_per_paycheck=personal_per_paycheck,
             starting_savings=starting_savings,
             savings_goal=savings_goal,
             snowball_split=0.50,
@@ -207,3 +210,78 @@ def test_budget_engine_build_plan_preserves_running_state_regression():
     assert summaries[0].snowball_payment == 250.0
     assert summaries[1].savings_contribution == 0.0
     assert summaries[1].snowball_payment == 500.0
+
+
+def test_per_paycheck_expenses_reduce_surplus():
+    config = make_config(
+        paycheck=1000,
+        starting_savings=1000,
+        savings_goal=1000,
+        rent_per_paycheck=100,
+        insurance_per_paycheck=50,
+        personal_per_paycheck=200,
+        debts=[Debt("Card", balance=1000, apr=0, minimum=0, due_day=10, snowball_order=1)],
+    )
+    period = PayPeriod(date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 14))
+
+    summary = BudgetEngine(config).process_pay_period(period)
+
+    assert summary.bills_paid == 350.0
+    assert summary.snowball_payment == 650.0
+    assert summary.remaining_cash == 0.0
+
+
+def test_savings_contribution_uses_cash_after_per_paycheck_expenses():
+    config = make_config(
+        paycheck=1000,
+        starting_savings=0,
+        savings_goal=1000,
+        rent_per_paycheck=100,
+        insurance_per_paycheck=50,
+        personal_per_paycheck=200,
+        debts=[Debt("Card", balance=1000, apr=0, minimum=0, due_day=10, snowball_order=1)],
+    )
+    period = PayPeriod(date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 14))
+
+    summary = BudgetEngine(config).process_pay_period(period)
+
+    assert summary.savings_contribution == 325.0
+    assert summary.snowball_payment == 325.0
+
+
+def test_snowball_uses_cash_after_per_paycheck_expenses_and_monthly_bills():
+    config = make_config(
+        paycheck=1000,
+        starting_savings=1000,
+        savings_goal=1000,
+        rent_per_paycheck=100,
+        insurance_per_paycheck=50,
+        personal_per_paycheck=200,
+        bills=[Bill("Phone", 100, 10)],
+        debts=[Debt("Card", balance=1000, apr=0, minimum=0, due_day=10, snowball_order=1)],
+    )
+    period = PayPeriod(date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 14))
+
+    summary = BudgetEngine(config).process_pay_period(period)
+
+    assert summary.bills_paid == 450.0
+    assert summary.snowball_payment == 550.0
+
+
+def test_zero_per_paycheck_expenses_preserve_existing_behavior():
+    config = make_config(
+        paycheck=1000,
+        starting_savings=0,
+        savings_goal=1000,
+        rent_per_paycheck=0,
+        insurance_per_paycheck=0,
+        personal_per_paycheck=0,
+        debts=[Debt("Card", balance=1000, apr=0, minimum=0, due_day=10, snowball_order=1)],
+    )
+    period = PayPeriod(date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 14))
+
+    summary = BudgetEngine(config).process_pay_period(period)
+
+    assert summary.bills_paid == 0.0
+    assert summary.savings_contribution == 500.0
+    assert summary.snowball_payment == 500.0
