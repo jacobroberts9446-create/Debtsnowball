@@ -2,6 +2,7 @@ import json
 import sqlite3
 from contextlib import closing
 from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +13,15 @@ from app.calendar_engine import CalendarEngine
 from app.config import Config
 from app.database import Database
 from app.excel_writer import ExcelWriter
-from app.models import Bill, BudgetSettings, Debt, Savings
+from app.models import (
+    Bill,
+    BudgetSettings,
+    Debt,
+    DebtPayoffForecast,
+    ForecastPeriod,
+    ForecastSummary,
+    Savings,
+)
 
 
 def test_calendar_engine_generates_biweekly_periods():
@@ -150,8 +159,48 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
             paid_off_debts=[DebtBalance("Card", 0, 50, "paid")],
         ),
     ]
+    forecast = ForecastSummary(
+        forecast_start_date=date(2026, 1, 2),
+        forecast_end_date=date(2026, 1, 16),
+        debt_free_date=date(2026, 1, 16),
+        savings_goal_date=date(2026, 1, 16),
+        starting_debt=Decimal("1500.00"),
+        total_interest_paid=Decimal("25.00"),
+        total_minimum_payments=Decimal("100.00"),
+        total_snowball_payments=Decimal("1250.00"),
+        ending_savings=Decimal("1000.00"),
+        remaining_debt=Decimal("650.00"),
+        completed=True,
+        debt_payoffs=[
+            DebtPayoffForecast(
+                debt_name="Card",
+                starting_balance=Decimal("500.00"),
+                payoff_date=date(2026, 1, 16),
+                total_interest_paid=Decimal("25.00"),
+                total_paid=Decimal("525.00"),
+            )
+        ],
+        periods=[
+            ForecastPeriod(
+                paycheck_date=date(2026, 1, 2),
+                total_debt_balance=Decimal("1500.00"),
+                savings_balance=Decimal("950.00"),
+                interest_paid=Decimal("10.00"),
+                minimums_paid=Decimal("50.00"),
+                snowball_paid=Decimal("400.00"),
+            ),
+            ForecastPeriod(
+                paycheck_date=date(2026, 1, 16),
+                total_debt_balance=Decimal("650.00"),
+                savings_balance=Decimal("1000.00"),
+                interest_paid=Decimal("15.00"),
+                minimums_paid=Decimal("50.00"),
+                snowball_paid=Decimal("850.00"),
+            ),
+        ],
+    )
 
-    ExcelWriter(workbook_path).write(summaries)
+    ExcelWriter(workbook_path).write(summaries, forecast)
 
     workbook = load_workbook(workbook_path)
     assert workbook.sheetnames == [
@@ -160,13 +209,36 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
         "Active Debts",
         "Paid-Off Debts",
         "Savings Progress",
+        "Forecast",
     ]
     assert len(workbook["Dashboard"]._charts) == 2
+    assert workbook["Dashboard"]["A12"].value == "Estimated Debt-Free Date"
+    assert workbook["Dashboard"]["B14"].value == 25.0
     assert workbook["Dashboard"].freeze_panes == "A4"
     assert workbook["Pay Period Summaries"].auto_filter.ref == "A1:K3"
     assert workbook["Active Debts"].max_row == 4
     assert workbook["Paid-Off Debts"].max_row == 2
     assert workbook["Savings Progress"]["C3"].value == 1000
+    assert workbook["Forecast"]["A1"].value == "Forecast"
+    assert workbook["Forecast"]["A4"].value == "Estimated Debt-Free Date"
+    assert workbook["Forecast"]["A14"].value == "Debt"
+    assert workbook["Forecast"]["A19"].value == "Paycheck Date"
+    assert workbook["Forecast"].auto_filter.ref == "A19:E21"
+    assert len(workbook["Forecast"]._charts) == 2
+    workbook.close()
+
+
+def test_excel_writer_handles_empty_forecast(tmp_path):
+    workbook_path = tmp_path / "empty_forecast.xlsx"
+
+    ExcelWriter(workbook_path).write([], None)
+
+    workbook = load_workbook(workbook_path)
+    assert "Forecast" in workbook.sheetnames
+    assert workbook["Forecast"]["A1"].value == "Forecast"
+    assert workbook["Forecast"]["A4"].value == "Estimated Debt-Free Date"
+    assert len(workbook["Forecast"]._charts) == 0
+    assert workbook["Dashboard"]["A1"].value == "DebtSnowball Dashboard"
     workbook.close()
 
 

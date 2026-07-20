@@ -4,12 +4,14 @@ run.py
 DebtSnowball
 """
 
+from copy import deepcopy
 from datetime import date
 
 from app.budget_engine import BudgetEngine
 from app.calendar_engine import CalendarEngine
 from app.config import Config
 from app.excel_writer import ExcelWriter
+from app.forecast_engine import ForecastEngine
 
 
 def main():
@@ -21,9 +23,11 @@ def main():
 
     periods = calendar.generate(date(2026, 12, 31))
 
+    forecast_config = deepcopy(config)
     budget = BudgetEngine(config)
     summaries = budget.build_plan(periods)
-    workbook_path = ExcelWriter().write(summaries)
+    forecast = ForecastEngine(forecast_config).forecast()
+    workbook_path = ExcelWriter().write(summaries, forecast)
 
     print()
 

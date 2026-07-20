@@ -285,3 +285,29 @@ def test_zero_per_paycheck_expenses_preserve_existing_behavior():
     assert summary.bills_paid == 0.0
     assert summary.savings_contribution == 500.0
     assert summary.snowball_payment == 500.0
+
+
+def test_minimum_reservation_accounts_for_interest_before_payoff():
+    config = make_config(
+        paycheck=100,
+        starting_savings=100,
+        savings_goal=100,
+        debts=[
+            Debt(
+                "Card",
+                balance=23.22,
+                apr=27.24,
+                minimum=67,
+                due_day=10,
+                snowball_order=1,
+            ),
+            Debt("Loan", balance=1000, apr=0, minimum=0, due_day=10, snowball_order=2),
+        ],
+    )
+    period = PayPeriod(date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 14))
+
+    summary = BudgetEngine(config).process_pay_period(period)
+
+    assert summary.debt_minimums == 23.46
+    assert summary.snowball_payment == 76.54
+    assert summary.remaining_cash == 0.0

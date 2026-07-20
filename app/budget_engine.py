@@ -123,12 +123,20 @@ class BudgetEngine:
         """Return scheduled debt minimum total for the pay period."""
         return round(
             sum(
-                payment.amount
+                self._debt_minimum_after_interest(payment.name)
                 for payment in scheduled_payments
                 if payment.payment_type == "debt"
             ),
             2,
         )
+
+    def _debt_minimum_after_interest(self, debt_name: str) -> float:
+        """Return the expected minimum payment after this period's interest."""
+        debt = next(
+            debt for debt in self.debt_engine.debts if debt.name == debt_name
+        )
+        balance_after_interest = debt.balance + (debt.balance * debt.rate_per_paycheck)
+        return round(min(debt.minimum, balance_after_interest), 2)
 
     def _surplus_after_required_payments(
         self,
