@@ -6,9 +6,10 @@ Compares a baseline forecast with alternative extra-payment scenarios.
 
 from copy import deepcopy
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from app.forecast_engine import ForecastEngine
+from app.money import money
 from app.models import (
     Debt,
     ForecastSummary,
@@ -17,9 +18,6 @@ from app.models import (
     ScenarioDelta,
     ScenarioResult,
 )
-
-
-MONEY = Decimal("0.01")
 
 
 class ScenarioEngine:
@@ -83,8 +81,8 @@ class ScenarioEngine:
         if self.starting_debts is not None:
             scenario_config.debts = deepcopy(self.starting_debts)
         if self.starting_savings is not None:
-            scenario_config.settings.starting_savings = float(
-                self._money(self.starting_savings)
+            scenario_config.settings.starting_savings = self._money(
+                self.starting_savings
             )
         if self.forecast_start_date is not None:
             scenario_config.settings.first_paycheck = self.forecast_start_date
@@ -187,4 +185,4 @@ class ScenarioEngine:
         return (baseline_date - scenario_date).days
 
     def _money(self, value) -> Decimal:
-        return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
+        return money(value)

@@ -9,6 +9,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from app.money import excel_number
+
 
 class Database:
     """Persist generated budget plans to SQLite."""
@@ -77,12 +79,12 @@ class Database:
                     [
                         (
                             paycheck.pay_date.isoformat(),
-                            paycheck.income,
-                            paycheck.bills_paid,
-                            paycheck.debt_minimums,
-                            paycheck.snowball_payment,
-                            paycheck.savings_added,
-                            paycheck.checking_remaining,
+                            self._storage_number(paycheck.income),
+                            self._storage_number(paycheck.bills_paid),
+                            self._storage_number(paycheck.debt_minimums),
+                            self._storage_number(paycheck.snowball_payment),
+                            self._storage_number(paycheck.savings_added),
+                            self._storage_number(paycheck.checking_remaining),
                             "\n".join(paycheck.notes),
                         )
                         for paycheck in paychecks
@@ -104,11 +106,11 @@ class Database:
                     [
                         (
                             debt["name"],
-                            debt["balance"],
-                            debt["apr"],
-                            debt["minimum"],
-                            debt["total_paid"],
-                            debt["total_interest_paid"],
+                            self._storage_number(debt["balance"]),
+                            str(debt["apr"]),
+                            self._storage_number(debt["minimum"]),
+                            self._storage_number(debt["total_paid"]),
+                            self._storage_number(debt["total_interest_paid"]),
                             debt["status"],
                         )
                         for debt in debts
@@ -117,3 +119,7 @@ class Database:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def _storage_number(self, value: object) -> float:
+        """Convert money to the existing SQLite REAL storage boundary."""
+        return excel_number(value)

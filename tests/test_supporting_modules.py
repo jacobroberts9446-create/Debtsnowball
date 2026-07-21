@@ -252,6 +252,48 @@ def test_excel_writer_handles_empty_forecast(tmp_path):
     workbook.close()
 
 
+def test_excel_writer_normalizes_negative_zero_money_cells(tmp_path):
+    workbook_path = tmp_path / "negative_zero.xlsx"
+    summaries = [
+        PayPeriodSummary(
+            pay_date=date(2026, 1, 2),
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 15),
+            income=Decimal("100.00"),
+            bills_paid=Decimal("-0.00"),
+            debt_minimums=Decimal("-0.00"),
+            snowball_payment=Decimal("-0.00"),
+            savings_contribution=Decimal("-0.00"),
+            savings_balance=Decimal("-0.00"),
+            savings_goal=Decimal("100.00"),
+            remaining_cash=Decimal("-0.00"),
+            active_debt_balances=[
+                DebtBalance("Card", Decimal("-0.00"), Decimal("-0.00"), "paid")
+            ],
+            paid_off_debts=[
+                DebtBalance("Card", Decimal("-0.00"), Decimal("-0.00"), "paid")
+            ],
+        )
+    ]
+
+    ExcelWriter(workbook_path).write(summaries, None)
+
+    workbook = load_workbook(workbook_path, data_only=True)
+    pay_period = workbook["Pay Period Summaries"]
+    active_debts = workbook["Active Debts"]
+    paid_off_debts = workbook["Paid-Off Debts"]
+    assert pay_period["E2"].value == 0
+    assert pay_period["I2"].value == 0
+    assert pay_period["N2"].value == 0
+    assert pay_period["R2"].value == 0
+    assert pay_period["T2"].value == 0
+    assert active_debts["C2"].value == 0
+    assert active_debts["D2"].value == 0
+    assert paid_off_debts["C2"].value == 0
+    assert paid_off_debts["D2"].value == 0
+    workbook.close()
+
+
 def test_excel_writer_uses_sparse_labels_for_long_forecast_charts(tmp_path):
     workbook_path = tmp_path / "long_forecast.xlsx"
     periods = [

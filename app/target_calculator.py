@@ -7,9 +7,10 @@ requested target date.
 
 from copy import deepcopy
 from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING
 
 from app.forecast_engine import ForecastEngine
+from app.money import money, to_decimal
 from app.models import (
     DebtFreeTargetIteration,
     DebtFreeTargetRequest,
@@ -17,9 +18,6 @@ from app.models import (
     DebtFreeTargetStatus,
     ForecastSummary,
 )
-
-
-MONEY = Decimal("0.01")
 
 
 class DebtFreeTargetCalculator:
@@ -216,15 +214,14 @@ class DebtFreeTargetCalculator:
         return precision
 
     def _money(self, value) -> Decimal:
-        return self._decimal(value, "money").quantize(MONEY, rounding=ROUND_HALF_UP)
+        return money(value)
 
     def _decimal(self, value, label: str) -> Decimal:
         try:
-            decimal_value = Decimal(str(value))
-        except (InvalidOperation, ValueError) as exc:
+            decimal_value = to_decimal(value)
+        except ValueError as exc:
+            if "finite" in str(exc):
+                raise ValueError(f"{label} must be finite.") from exc
             raise ValueError(f"{label} must be a valid decimal value.") from exc
-
-        if not decimal_value.is_finite():
-            raise ValueError(f"{label} must be finite.")
 
         return decimal_value

@@ -13,6 +13,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.budget_engine import PayPeriodSummary
+from app.money import ZERO_MONEY, excel_number, money
 from app.models import (
     DebtFreeTargetResult,
     DebtFreeTargetStatus,
@@ -231,14 +232,17 @@ class ExcelWriter:
         )
 
         for summary in summaries:
-            remaining_to_goal = max(summary.savings_goal - summary.savings_balance, 0.0)
+            remaining_to_goal = max(
+                summary.savings_goal - summary.savings_balance,
+                ZERO_MONEY,
+            )
             sheet.append(
                 [
                     summary.pay_date,
                     summary.savings_contribution,
                     summary.savings_balance,
                     summary.savings_goal,
-                    round(remaining_to_goal, 2),
+                    remaining_to_goal,
                     self._chart_date_label(summary.pay_date, len(summaries)),
                 ]
             )
@@ -504,20 +508,22 @@ class ExcelWriter:
         else:
             first_summary = summaries[0]
             last_summary = summaries[-1]
-            starting_savings = round(
+            starting_savings = money(
                 first_summary.savings_balance - first_summary.savings_contribution,
-                2,
             )
             current_savings = last_summary.savings_balance
             savings_goal = last_summary.savings_goal
-            remaining_to_goal = max(savings_goal - current_savings, 0.0)
+            remaining_to_goal = max(savings_goal - current_savings, ZERO_MONEY)
             current_debt = self._active_debt_total(last_summary)
             paid_off_count = len(last_summary.paid_off_debts)
-            total_snowball = round(
-                sum(summary.snowball_payment for summary in summaries), 2
+            total_snowball = money(
+                sum(
+                    (summary.snowball_payment for summary in summaries),
+                    ZERO_MONEY,
+                )
             )
-            total_minimums = round(
-                sum(summary.debt_minimums for summary in summaries), 2
+            total_minimums = money(
+                sum((summary.debt_minimums for summary in summaries), ZERO_MONEY)
             )
 
             metrics = [
@@ -1577,12 +1583,14 @@ class ExcelWriter:
 
         sheet.freeze_panes = "A2"
 
-    def _active_debt_total(self, summary: PayPeriodSummary) -> float:
-        return round(sum(debt.balance for debt in summary.active_debt_balances), 2)
+    def _active_debt_total(self, summary: PayPeriodSummary):
+        return money(
+            sum((debt.balance for debt in summary.active_debt_balances), ZERO_MONEY)
+        )
 
     def _cell_value(self, value: object) -> object:
         if hasattr(value, "quantize"):
-            return float(value)
+            return excel_number(value)
 
         return value
 

@@ -10,6 +10,11 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import List
 
+from app.money import CENT, ZERO_MONEY, money, to_decimal
+
+
+REMAINING_PENNY_PAYOFF_TOLERANCE = CENT
+
 
 # --------------------------------------------------
 # Bill
@@ -19,11 +24,11 @@ from typing import List
 @dataclass
 class Bill:
     name: str
-    amount: float
+    amount: Decimal
     due_day: int
 
-    def __post_init__(self):
-        self.amount = round(float(self.amount), 2)
+    def __post_init__(self) -> None:
+        self.amount = money(self.amount)
         if not 1 <= int(self.due_day) <= 31:
             raise ValueError(f"{self.name} due_day must be between 1 and 31.")
         self.due_day = int(self.due_day)
@@ -37,67 +42,70 @@ class Bill:
 @dataclass
 class Debt:
     name: str
-    balance: float
-    apr: float
-    minimum: float
+    balance: Decimal
+    apr: Decimal
+    minimum: Decimal
     due_day: int
     snowball_order: int
 
-    total_interest_paid: float = 0.0
-    total_paid: float = 0.0
+    total_interest_paid: Decimal = ZERO_MONEY
+    total_paid: Decimal = ZERO_MONEY
 
-    def __post_init__(self):
-        self.balance = round(float(self.balance), 2)
-        self.apr = float(self.apr)
-        self.minimum = round(float(self.minimum), 2)
+    def __post_init__(self) -> None:
+        self.balance = money(self.balance)
+        self.apr = to_decimal(self.apr)
+        self.minimum = money(self.minimum)
+        self.total_interest_paid = money(self.total_interest_paid)
+        self.total_paid = money(self.total_paid)
         self.due_day = int(self.due_day)
         self.snowball_order = int(self.snowball_order)
 
-        if self.balance < 0:
+        if self.balance < ZERO_MONEY:
             raise ValueError(f"{self.name} balance cannot be negative.")
-        if self.apr < 0:
+        if self.apr < Decimal("0"):
             raise ValueError(f"{self.name} apr cannot be negative.")
-        if self.minimum < 0:
+        if self.minimum < ZERO_MONEY:
             raise ValueError(f"{self.name} minimum cannot be negative.")
         if not 1 <= self.due_day <= 31:
             raise ValueError(f"{self.name} due_day must be between 1 and 31.")
 
     @property
     def active(self) -> bool:
-        return self.balance > 0.01
+        return self.balance > REMAINING_PENNY_PAYOFF_TOLERANCE
 
     @property
-    def rate_per_paycheck(self) -> float:
-        return (self.apr / 100) / 26
+    def rate_per_paycheck(self) -> Decimal:
+        return (self.apr / Decimal("100")) / Decimal("26")
 
     @property
     def payoff_status(self) -> str:
         return "paid" if not self.active else "active"
 
-    def add_interest(self) -> float:
+    def add_interest(self) -> Decimal:
         if not self.active:
-            return 0.0
+            return ZERO_MONEY
 
         interest = self.balance * self.rate_per_paycheck
         self.balance += interest
         self.total_interest_paid += interest
 
-        return round(interest, 2)
+        return money(interest)
 
-    def make_payment(self, amount: float) -> float:
-        if amount <= 0:
-            return 0.0
+    def make_payment(self, amount: Decimal) -> Decimal:
+        amount = money(amount)
+        if amount <= ZERO_MONEY:
+            return ZERO_MONEY
 
         payment = min(amount, self.balance)
 
         self.balance -= payment
         self.total_paid += payment
 
-        if self.balance < 0.01:
-            self.balance = 0.0
+        if self.balance <= REMAINING_PENNY_PAYOFF_TOLERANCE:
+            self.balance = ZERO_MONEY
 
-        self.balance = round(self.balance, 2)
-        return round(payment, 2)
+        self.balance = money(self.balance)
+        return money(payment)
 
 
 # --------------------------------------------------
@@ -107,30 +115,30 @@ class Debt:
 
 @dataclass
 class BudgetSettings:
-    paycheck: float
+    paycheck: Decimal
     first_paycheck: date
 
-    rent_per_paycheck: float
-    insurance_per_paycheck: float
-    personal_per_paycheck: float
+    rent_per_paycheck: Decimal
+    insurance_per_paycheck: Decimal
+    personal_per_paycheck: Decimal
 
-    starting_savings: float
-    savings_goal: float
+    starting_savings: Decimal
+    savings_goal: Decimal
 
-    snowball_split: float
+    snowball_split: Decimal
 
-    def __post_init__(self):
-        self.paycheck = round(float(self.paycheck), 2)
-        self.rent_per_paycheck = round(float(self.rent_per_paycheck), 2)
-        self.insurance_per_paycheck = round(float(self.insurance_per_paycheck), 2)
-        self.personal_per_paycheck = round(float(self.personal_per_paycheck), 2)
-        self.starting_savings = round(float(self.starting_savings), 2)
-        self.savings_goal = round(float(self.savings_goal), 2)
-        self.snowball_split = float(self.snowball_split)
+    def __post_init__(self) -> None:
+        self.paycheck = money(self.paycheck)
+        self.rent_per_paycheck = money(self.rent_per_paycheck)
+        self.insurance_per_paycheck = money(self.insurance_per_paycheck)
+        self.personal_per_paycheck = money(self.personal_per_paycheck)
+        self.starting_savings = money(self.starting_savings)
+        self.savings_goal = money(self.savings_goal)
+        self.snowball_split = to_decimal(self.snowball_split)
 
-        if self.paycheck < 0:
+        if self.paycheck < ZERO_MONEY:
             raise ValueError("paycheck cannot be negative.")
-        if not 0 <= self.snowball_split <= 1:
+        if not Decimal("0") <= self.snowball_split <= Decimal("1"):
             raise ValueError("snowball_split must be between 0 and 1.")
 
 
@@ -142,9 +150,12 @@ class BudgetSettings:
 @dataclass
 class ScheduledPayment:
     name: str
-    amount: float
+    amount: Decimal
     due_date: date
     payment_type: str  # "bill" or "debt"
+
+    def __post_init__(self) -> None:
+        self.amount = money(self.amount)
 
 
 # --------------------------------------------------
@@ -167,13 +178,13 @@ class PayPeriod:
 @dataclass
 class Paycheck:
     pay_date: date
-    income: float
+    income: Decimal
 
-    bills_paid: float = 0.0
-    debt_minimums: float = 0.0
-    snowball_payment: float = 0.0
-    savings_added: float = 0.0
-    checking_remaining: float = 0.0
+    bills_paid: Decimal = ZERO_MONEY
+    debt_minimums: Decimal = ZERO_MONEY
+    snowball_payment: Decimal = ZERO_MONEY
+    savings_added: Decimal = ZERO_MONEY
+    checking_remaining: Decimal = ZERO_MONEY
 
     notes: List[str] = field(default_factory=list)
 
@@ -185,11 +196,15 @@ class Paycheck:
 
 @dataclass
 class Savings:
-    current_balance: float
-    goal: float
+    current_balance: Decimal
+    goal: Decimal
 
-    def add(self, amount: float):
-        self.current_balance += amount
+    def __post_init__(self) -> None:
+        self.current_balance = money(self.current_balance)
+        self.goal = money(self.goal)
+
+    def add(self, amount: Decimal) -> None:
+        self.current_balance = money(self.current_balance + money(amount))
 
     @property
     def goal_met(self) -> bool:

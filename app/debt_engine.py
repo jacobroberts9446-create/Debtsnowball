@@ -4,6 +4,9 @@ debt_engine.py
 Calculates debt interest, minimum payments, and snowball payments.
 """
 
+from decimal import Decimal
+
+from app.money import ZERO_MONEY, money
 from app.models import Debt, ScheduledPayment
 
 
@@ -13,7 +16,7 @@ class DebtEngine:
     def __init__(self, debts: list[Debt]) -> None:
         self.debts = sorted(debts, key=lambda debt: debt.snowball_order)
         self.paid_off_debts: list[Debt] = []
-        self.freed_minimum_payment = 0.0
+        self.freed_minimum_payment = ZERO_MONEY
 
     @property
     def active_debts(self) -> list[Debt]:
@@ -30,9 +33,9 @@ class DebtEngine:
 
         return debts[0]
 
-    def accrue_interest(self) -> dict[str, float]:
+    def accrue_interest(self) -> dict[str, Decimal]:
         """Accrue one pay-period of interest for each active debt."""
-        interest_by_debt: dict[str, float] = {}
+        interest_by_debt: dict[str, Decimal] = {}
 
         for debt in list(self.debts):
             interest_by_debt[debt.name] = debt.add_interest()
@@ -50,13 +53,13 @@ class DebtEngine:
     def pay_minimums_due(
         self,
         scheduled_payments: list[ScheduledPayment],
-    ) -> dict[str, float]:
+    ) -> dict[str, Decimal]:
         """Pay minimums for debts present in the scheduled payments."""
         return self.pay_due_minimums(self.due_debt_names(scheduled_payments))
 
-    def pay_due_minimums(self, due_debt_names: set[str]) -> dict[str, float]:
+    def pay_due_minimums(self, due_debt_names: set[str]) -> dict[str, Decimal]:
         """Pay minimums for the supplied debt names."""
-        payments: dict[str, float] = {}
+        payments: dict[str, Decimal] = {}
         due_debt_names = set(due_debt_names)
 
         for debt in list(self.debts):
@@ -68,34 +71,36 @@ class DebtEngine:
         self._remove_paid_off_debts()
         return payments
 
-    def snowball_available(self, base_amount: float) -> float:
+    def snowball_available(self, base_amount: Decimal) -> Decimal:
         """Return base snowball plus minimums freed by prior payoffs."""
-        return round(max(float(base_amount), 0.0) + self.freed_minimum_payment, 2)
+        return money(max(money(base_amount), ZERO_MONEY) + self.freed_minimum_payment)
 
     def apply_snowball(
         self,
-        amount: float,
+        amount: Decimal,
         include_freed_minimums: bool = True,
-    ) -> tuple[dict[str, float], float]:
+    ) -> tuple[dict[str, Decimal], Decimal]:
         """Apply snowball money across debts in payoff order."""
         if include_freed_minimums:
             remaining = self.snowball_available(amount)
         else:
-            remaining = round(max(float(amount), 0.0), 2)
+            remaining = money(max(money(amount), ZERO_MONEY))
 
-        payments: dict[str, float] = {}
+        payments: dict[str, Decimal] = {}
 
-        while remaining > 0:
+        while remaining > ZERO_MONEY:
             target = self.first_active_debt
             if target is None:
                 break
 
             paid = target.make_payment(remaining)
-            if paid <= 0:
+            if paid <= ZERO_MONEY:
                 break
 
-            payments[target.name] = round(payments.get(target.name, 0.0) + paid, 2)
-            remaining = round(remaining - paid, 2)
+            payments[target.name] = money(
+                payments.get(target.name, ZERO_MONEY) + paid
+            )
+            remaining = money(remaining - paid)
             self._remove_paid_off_debts()
 
         return payments, remaining
@@ -103,7 +108,7 @@ class DebtEngine:
     def process_pay_period(
         self,
         scheduled_payments: list[ScheduledPayment],
-        snowball_amount: float,
+        snowball_amount: Decimal,
     ) -> dict[str, object]:
         """Run interest, minimum payments, and snowball for one pay period."""
         snowball_with_prior_freed_minimums = self.snowball_available(snowball_amount)
@@ -130,10 +135,10 @@ class DebtEngine:
         return [
             {
                 "name": debt.name,
-                "balance": round(debt.balance, 2),
+                "balance": money(debt.balance),
                 "minimum": debt.minimum,
-                "total_paid": round(debt.total_paid, 2),
-                "total_interest_paid": round(debt.total_interest_paid, 2),
+                "total_paid": money(debt.total_paid),
+                "total_interest_paid": money(debt.total_interest_paid),
                 "status": debt.payoff_status,
             }
             for debt in self.paid_off_debts
@@ -147,10 +152,12 @@ class DebtEngine:
                 remaining_debts.append(debt)
                 continue
 
+            if debt in self.paid_off_debts:
+                continue
+
             self.paid_off_debts.append(debt)
-            self.freed_minimum_payment = round(
+            self.freed_minimum_payment = money(
                 self.freed_minimum_payment + debt.minimum,
-                2,
             )
 
         self.debts = remaining_debts
@@ -160,11 +167,11 @@ class DebtEngine:
         return [
             {
                 "name": debt.name,
-                "balance": round(debt.balance, 2),
+                "balance": money(debt.balance),
                 "apr": debt.apr,
                 "minimum": debt.minimum,
-                "total_paid": round(debt.total_paid, 2),
-                "total_interest_paid": round(debt.total_interest_paid, 2),
+                "total_paid": money(debt.total_paid),
+                "total_interest_paid": money(debt.total_interest_paid),
                 "status": debt.payoff_status,
             }
             for debt in self.debts

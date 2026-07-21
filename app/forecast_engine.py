@@ -7,14 +7,12 @@ the live application configuration.
 
 from copy import deepcopy
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from app.budget_engine import BudgetEngine, PayPeriodSummary
 from app.calendar_engine import CalendarEngine
+from app.money import ZERO_MONEY, money, to_decimal
 from app.models import DebtPayoffForecast, ForecastPeriod, ForecastSummary
-
-
-MONEY = Decimal("0.01")
 
 
 class ForecastEngine:
@@ -45,11 +43,11 @@ class ForecastEngine:
         savings_goal_date = (
             forecast_start_date if starting_savings >= savings_goal else None
         )
-        debt_free_date = forecast_start_date if starting_debt == Decimal("0.00") else None
+        debt_free_date = forecast_start_date if starting_debt == ZERO_MONEY else None
 
         periods: list[ForecastPeriod] = []
-        total_minimums = Decimal("0.00")
-        total_snowball = Decimal("0.00")
+        total_minimums = ZERO_MONEY
+        total_snowball = ZERO_MONEY
         forecast_end_date = forecast_start_date
 
         if debt_free_date is not None and savings_goal_date is not None:
@@ -62,7 +60,7 @@ class ForecastEngine:
                 total_minimums=total_minimums,
                 total_snowball=total_snowball,
                 ending_savings=starting_savings,
-                remaining_debt=Decimal("0.00"),
+                remaining_debt=ZERO_MONEY,
                 debt_payoffs=debt_payoffs,
                 periods=periods,
                 debt_engine=None,
@@ -160,7 +158,7 @@ class ForecastEngine:
             if savings_goal_date is None and savings_balance >= savings_goal:
                 savings_goal_date = summary.pay_date
 
-            if debt_free_date is None and total_debt_balance == Decimal("0.00"):
+            if debt_free_date is None and total_debt_balance == ZERO_MONEY:
                 debt_free_date = summary.pay_date
 
             if debt_free_date is not None and savings_goal_date is not None:
@@ -206,7 +204,7 @@ class ForecastEngine:
         total_interest = self._total_interest_paid(debt_engine)
         completed = debt_free_date is not None and savings_goal_date is not None
 
-        if not completed and remaining_debt > Decimal("0.00"):
+        if not completed and remaining_debt > ZERO_MONEY:
             debt_free_date = None
 
         return ForecastSummary(
@@ -259,8 +257,8 @@ class ForecastEngine:
                 debt_name=debt.name,
                 starting_balance=self._money(debt.balance),
                 payoff_date=None,
-                total_interest_paid=Decimal("0.00"),
-                total_paid=Decimal("0.00"),
+                total_interest_paid=ZERO_MONEY,
+                total_paid=ZERO_MONEY,
             )
             for debt in debts
         }
@@ -284,7 +282,7 @@ class ForecastEngine:
 
     def _total_interest_paid(self, debt_engine: object | None) -> Decimal:
         if debt_engine is None:
-            return Decimal("0.00")
+            return ZERO_MONEY
 
         active_interest = sum(
             self._money(debt["total_interest_paid"]) for debt in debt_engine.summary()
@@ -296,7 +294,7 @@ class ForecastEngine:
         return self._money(active_interest + paid_interest)
 
     def _money(self, value) -> Decimal:
-        return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
+        return money(value)
 
     def _optional_money(self, value) -> Decimal | None:
         if value is None:
@@ -308,7 +306,7 @@ class ForecastEngine:
         if value is None:
             return None
 
-        return Decimal(str(value))
+        return to_decimal(value)
 
     def _add_years(self, value: date, years: int) -> date:
         try:

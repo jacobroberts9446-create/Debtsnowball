@@ -1,8 +1,6 @@
 from datetime import date
 from decimal import Decimal
 
-import pytest
-
 from app.debt_engine import DebtEngine
 from app.models import Debt, ScheduledPayment
 
@@ -17,9 +15,9 @@ def test_debt_interest_calculation_uses_paycheck_rate():
 
     interest = engine.accrue_interest()
 
-    assert interest["Card"] == pytest.approx(26.0)
-    assert debt.balance == pytest.approx(2626.0)
-    assert debt.total_interest_paid == pytest.approx(26.0)
+    assert interest["Card"] == Decimal("26.00")
+    assert debt.balance == Decimal("2626.00")
+    assert debt.total_interest_paid == Decimal("26.00")
 
 
 def test_minimum_payments_are_applied_for_scheduled_debts_only():
@@ -81,6 +79,47 @@ def test_exact_debt_payoff_removes_debt_and_frees_minimum():
     assert engine.active_debts == []
     assert engine.paid_off_summary()[0]["name"] == "Card"
     assert engine.freed_minimum_payment == 25.0
+
+
+def test_remaining_penny_is_explicitly_treated_as_paid():
+    debt = Debt(
+        "Card",
+        balance="1.01",
+        apr="0",
+        minimum="0.00",
+        due_day=1,
+        snowball_order=1,
+    )
+    engine = DebtEngine([debt])
+
+    payments, remaining = engine.apply_snowball(Decimal("1.00"))
+
+    assert payments == {"Card": Decimal("1.00")}
+    assert remaining == Decimal("0.00")
+    assert debt.balance == Decimal("0.00")
+    assert debt.active is False
+    assert engine.active_debts == []
+    assert engine.paid_off_summary()[0]["balance"] == Decimal("0.00")
+
+
+def test_more_than_one_remaining_cent_is_not_forgiven():
+    debt = Debt(
+        "Card",
+        balance="1.02",
+        apr="0",
+        minimum="0.00",
+        due_day=1,
+        snowball_order=1,
+    )
+    engine = DebtEngine([debt])
+
+    payments, remaining = engine.apply_snowball(Decimal("1.00"))
+
+    assert payments == {"Card": Decimal("1.00")}
+    assert remaining == Decimal("0.00")
+    assert debt.balance == Decimal("0.02")
+    assert debt.active is True
+    assert [active.name for active in engine.active_debts] == ["Card"]
 
 
 def test_multiple_debts_paid_off_in_one_snowball_payment():

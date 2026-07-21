@@ -6,7 +6,9 @@ Determines which bills and debt minimums belong to each paycheck.
 
 import calendar
 from datetime import date, timedelta
+from decimal import Decimal
 
+from app.money import money
 from app.models import PayPeriod, ScheduledPayment
 
 
@@ -97,8 +99,8 @@ class Scheduler:
             schedule = self.schedule_for_periods(periods)
 
         issues: list[str] = []
-        expected: dict[tuple[str, str, date, float], date] = {}
-        actual: dict[tuple[str, str, date, float], date] = {}
+        expected: dict[tuple[str, str, date, Decimal], date] = {}
+        actual: dict[tuple[str, str, date, Decimal], date] = {}
 
         for index, period in enumerate(periods):
             next_paycheck = self._next_paycheck_for_period(periods, index)
@@ -197,8 +199,8 @@ class Scheduler:
         self,
         pay_date: date,
         next_paycheck: date,
-    ) -> dict[tuple[str, str, date, float], date]:
-        assignments: dict[tuple[str, str, date, float], date] = {}
+    ) -> dict[tuple[str, str, date, Decimal], date]:
+        assignments: dict[tuple[str, str, date, Decimal], date] = {}
 
         for bill in self.config.bills:
             for due_date in self._due_dates_between(
@@ -229,10 +231,10 @@ class Scheduler:
 
         return assignments
 
-    def _payment_key(self, payment: ScheduledPayment) -> tuple[str, str, date, float]:
+    def _payment_key(self, payment: ScheduledPayment) -> tuple[str, str, date, Decimal]:
         return (
             payment.payment_type,
             payment.name,
             payment.due_date,
-            round(float(payment.amount), 2),
+            money(payment.amount),
         )

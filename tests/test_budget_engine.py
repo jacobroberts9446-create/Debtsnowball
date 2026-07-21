@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 
 from app.budget_engine import BudgetEngine
@@ -308,6 +309,6 @@ def test_minimum_reservation_accounts_for_interest_before_payoff():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.debt_minimums == 23.46
-    assert summary.snowball_payment == 76.54
+    assert summary.debt_minimums == Decimal("23.46")
+    assert summary.snowball_payment == Decimal("76.54")
     assert summary.remaining_cash == 0.0

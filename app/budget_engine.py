@@ -7,10 +7,11 @@ for each pay period.
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING
 
 from app.calendar_engine import CalendarEngine
 from app.debt_engine import DebtEngine
+from app.money import CENT, ZERO_MONEY, money, to_decimal
 from app.models import (
     PlannedWithdrawalResult,
     SavingsFundingMode,
@@ -20,16 +21,13 @@ from app.models import (
 from app.scheduler import Scheduler
 
 
-MONEY = Decimal("0.01")
-
-
 @dataclass
 class DebtBalance:
     """Snapshot of a debt after a pay period is processed."""
 
     name: str
-    balance: float
-    minimum: float
+    balance: Decimal
+    minimum: Decimal
     status: str
 
 
@@ -40,49 +38,49 @@ class PayPeriodSummary:
     pay_date: date
     start_date: date
     end_date: date
-    income: float
-    bills_paid: float
-    debt_minimums: float
-    snowball_payment: float
-    savings_contribution: float
-    savings_balance: float
-    savings_goal: float
-    remaining_cash: float
+    income: Decimal
+    bills_paid: Decimal
+    debt_minimums: Decimal
+    snowball_payment: Decimal
+    savings_contribution: Decimal
+    savings_balance: Decimal
+    savings_goal: Decimal
+    remaining_cash: Decimal
     active_debt_balances: list[DebtBalance]
     paid_off_debts: list[DebtBalance]
     active_savings_goal_name: str | None = None
-    active_savings_target: float | None = None
+    active_savings_target: Decimal | None = None
     savings_goal_target_date: date | None = None
-    savings_balance_before_withdrawal: float | None = None
-    planned_withdrawal_amount: float = 0.0
-    savings_balance_after_withdrawal: float | None = None
+    savings_balance_before_withdrawal: Decimal | None = None
+    planned_withdrawal_amount: Decimal = ZERO_MONEY
+    savings_balance_after_withdrawal: Decimal | None = None
     withdrawal_name: str | None = None
-    goal_progress_percentage: float | None = None
+    goal_progress_percentage: Decimal | None = None
     savings_stage_changed: bool = False
-    required_fixed_expenses: float = 0.0
-    normal_personal_allowance: float = 0.0
-    actual_personal_allowance: float = 0.0
-    available_after_required_payments: float = 0.0
-    normal_savings_contribution: float = 0.0
-    deadline_required_savings_contribution: float = 0.0
-    snowball_before_savings_adjustment: float = 0.0
-    snowball_reduction: float = 0.0
-    personal_expense_reduction: float = 0.0
-    projected_savings_shortfall: float = 0.0
+    required_fixed_expenses: Decimal = ZERO_MONEY
+    normal_personal_allowance: Decimal = ZERO_MONEY
+    actual_personal_allowance: Decimal = ZERO_MONEY
+    available_after_required_payments: Decimal = ZERO_MONEY
+    normal_savings_contribution: Decimal = ZERO_MONEY
+    deadline_required_savings_contribution: Decimal = ZERO_MONEY
+    snowball_before_savings_adjustment: Decimal = ZERO_MONEY
+    snowball_reduction: Decimal = ZERO_MONEY
+    personal_expense_reduction: Decimal = ZERO_MONEY
+    projected_savings_shortfall: Decimal = ZERO_MONEY
 
 
 @dataclass
 class SavingsAllocation:
     """Savings and snowball allocation details for one pay period."""
 
-    savings_contribution: float
-    snowball_amount: float
-    normal_savings_contribution: float
-    deadline_required_savings_contribution: float
-    snowball_before_adjustment: float
-    snowball_reduction: float
-    personal_expense_reduction: float
-    projected_shortfall: float
+    savings_contribution: Decimal
+    snowball_amount: Decimal
+    normal_savings_contribution: Decimal
+    deadline_required_savings_contribution: Decimal
+    snowball_before_adjustment: Decimal
+    snowball_reduction: Decimal
+    personal_expense_reduction: Decimal
+    projected_shortfall: Decimal
 
 
 class BudgetEngine:
@@ -98,10 +96,8 @@ class BudgetEngine:
         self.settings = config.settings
         self.scheduler = Scheduler(config)
         self.debt_engine = DebtEngine(config.debts)
-        self.savings_balance = round(float(self.settings.starting_savings), 2)
-        self.extra_snowball_per_paycheck = self._money_float(
-            extra_snowball_per_paycheck
-        )
+        self.savings_balance = money(self.settings.starting_savings)
+        self.extra_snowball_per_paycheck = money(extra_snowball_per_paycheck)
         self.savings_percentage_override = savings_percentage_override
         self.savings_plan = getattr(config, "savings_plan", None)
         self._applied_withdrawal_indexes: set[int] = set()
@@ -134,9 +130,8 @@ class BudgetEngine:
 
         allocation = self._split_surplus(surplus, active_stage, period.pay_date)
         self._record_stage_progress(active_stage, period.pay_date)
-        snowball_amount = round(
+        snowball_amount = money(
             allocation.snowball_amount + self.extra_snowball_per_paycheck,
-            2,
         )
         debt_engine_snowball = self._debt_engine_snowball_amount(snowball_amount)
         debt_result = self.debt_engine.process_pay_period(
@@ -144,8 +139,8 @@ class BudgetEngine:
             snowball_amount=debt_engine_snowball,
         )
 
-        debt_minimums_paid = round(sum(debt_result["minimums"].values()), 2)
-        snowball_paid = round(sum(debt_result["snowball"].values()), 2)
+        debt_minimums_paid = money(sum(debt_result["minimums"].values(), ZERO_MONEY))
+        snowball_paid = money(sum(debt_result["snowball"].values(), ZERO_MONEY))
         remaining_cash = self._remaining_cash(
             bills_paid=bills_paid,
             debt_minimums=debt_minimums_paid,
@@ -183,10 +178,9 @@ class BudgetEngine:
             savings_stage_changed=stage_changed,
             required_fixed_expenses=bills_paid,
             normal_personal_allowance=self.settings.personal_per_paycheck,
-            actual_personal_allowance=round(
+            actual_personal_allowance=money(
                 self.settings.personal_per_paycheck
                 - allocation.personal_expense_reduction,
-                2,
             ),
             available_after_required_payments=surplus,
             normal_savings_contribution=allocation.normal_savings_contribution,
@@ -201,73 +195,94 @@ class BudgetEngine:
             projected_savings_shortfall=allocation.projected_shortfall,
         )
 
-    def _scheduled_bill_total(self, scheduled_payments) -> float:
+    def _scheduled_bill_total(self, scheduled_payments) -> Decimal:
         """Return fixed expenses plus scheduled non-debt bills for the pay period."""
-        return round(
+        return money(
             self._fixed_expense_total()
             +
             sum(
-                payment.amount
-                for payment in scheduled_payments
-                if payment.payment_type != "debt"
+                (
+                    payment.amount
+                    for payment in scheduled_payments
+                    if payment.payment_type != "debt"
+                ),
+                ZERO_MONEY,
             ),
-            2,
         )
 
-    def _fixed_expense_total(self) -> float:
+    def _fixed_expense_total(self) -> Decimal:
         """Return configured expenses that are reserved every paycheck."""
-        return round(
+        return money(
             self.settings.rent_per_paycheck
             + self.settings.insurance_per_paycheck
             + self.settings.personal_per_paycheck,
-            2,
         )
 
-    def _scheduled_debt_minimum_total(self, scheduled_payments) -> float:
+    def _scheduled_debt_minimum_total(self, scheduled_payments) -> Decimal:
         """Return scheduled debt minimum total for the pay period."""
-        return round(
+        return money(
             sum(
-                self._debt_minimum_after_interest(payment.name)
-                for payment in scheduled_payments
-                if payment.payment_type == "debt"
-            ),
-            2,
+                (
+                    self._debt_minimum_after_interest(payment.name)
+                    for payment in scheduled_payments
+                    if payment.payment_type == "debt"
+                ),
+                ZERO_MONEY,
+            )
         )
 
-    def _debt_minimum_after_interest(self, debt_name: str) -> float:
+    def _debt_minimum_after_interest(self, debt_name: str) -> Decimal:
         """Return the expected minimum payment after this period's interest."""
         debt = next(
             debt for debt in self.debt_engine.debts if debt.name == debt_name
         )
         balance_after_interest = debt.balance + (debt.balance * debt.rate_per_paycheck)
-        return round(min(debt.minimum, balance_after_interest), 2)
+        return money(min(debt.minimum, balance_after_interest))
 
     def _surplus_after_required_payments(
         self,
-        bills_paid: float,
-        debt_minimums: float,
-    ) -> float:
+        bills_paid: Decimal,
+        debt_minimums: Decimal,
+    ) -> Decimal:
         """Return cash left after bills and reserved debt minimums."""
-        return round(max(self.settings.paycheck - bills_paid - debt_minimums, 0.0), 2)
+        return money(max(self.settings.paycheck - bills_paid - debt_minimums, ZERO_MONEY))
 
     def _split_surplus(
         self,
-        surplus: float,
+        surplus: Decimal,
         active_stage,
         pay_date: date,
     ) -> SavingsAllocation:
         """Apply the savings rule and return detailed allocation amounts."""
-        if surplus <= 0:
-            return SavingsAllocation(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        if surplus <= ZERO_MONEY:
+            return SavingsAllocation(
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+            )
 
         active_target = self._active_savings_target()
         if self.savings_balance >= active_target:
-            snowball = round(surplus, 2)
-            return SavingsAllocation(0.0, snowball, 0.0, 0.0, snowball, 0.0, 0.0, 0.0)
+            snowball = money(surplus)
+            return SavingsAllocation(
+                ZERO_MONEY,
+                snowball,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                snowball,
+                ZERO_MONEY,
+                ZERO_MONEY,
+                ZERO_MONEY,
+            )
 
-        savings_needed = round(active_target - self.savings_balance, 2)
+        savings_needed = money(active_target - self.savings_balance)
         normal_savings = min(
-            round(surplus * self._savings_percentage(), 2),
+            money(surplus * self._savings_percentage()),
             savings_needed,
         )
         funding_mode = (
@@ -275,29 +290,28 @@ class BudgetEngine:
             if active_stage is not None
             else SavingsFundingMode.PERCENTAGE
         )
-        deadline_required = 0.0
-        projected_shortfall = 0.0
-        personal_reduction = 0.0
+        deadline_required = ZERO_MONEY
+        projected_shortfall = ZERO_MONEY
+        personal_reduction = ZERO_MONEY
         if funding_mode == SavingsFundingMode.DEADLINE_PRIORITY:
             deadline_required = self._deadline_required_savings(
                 goal=active_stage,
                 pay_date=pay_date,
             )
-            snowball_available = round(max(surplus - normal_savings, 0.0), 2)
+            snowball_available = money(max(surplus - normal_savings, ZERO_MONEY))
             redirected_snowball = min(
                 snowball_available,
-                round(max(savings_needed - normal_savings, 0.0), 2),
+                money(max(savings_needed - normal_savings, ZERO_MONEY)),
             )
             personal_reduction = self._personal_expense_reduction(
                 goal=active_stage,
                 pay_date=pay_date,
-                current_discretionary_savings=round(
+                current_discretionary_savings=money(
                     normal_savings + redirected_snowball,
-                    2,
                 ),
             )
             savings_contribution = min(
-                round(normal_savings + redirected_snowball + personal_reduction, 2),
+                money(normal_savings + redirected_snowball + personal_reduction),
                 savings_needed,
             )
             projected_shortfall = self._projected_shortfall_after_contribution(
@@ -310,20 +324,25 @@ class BudgetEngine:
         else:
             savings_contribution = normal_savings
 
-        self.savings_balance = round(self.savings_balance + savings_contribution, 2)
-        snowball_amount = round(
-            max(surplus - normal_savings - (savings_contribution - normal_savings), 0.0),
-            2,
+        self.savings_balance = money(self.savings_balance + savings_contribution)
+        snowball_amount = money(
+            max(
+                surplus - normal_savings - (savings_contribution - normal_savings),
+                ZERO_MONEY,
+            ),
         )
         if funding_mode == SavingsFundingMode.DEADLINE_PRIORITY:
-            snowball_amount = round(
-                max(surplus - normal_savings - (savings_contribution - normal_savings - personal_reduction), 0.0),
-                2,
+            snowball_amount = money(
+                max(
+                    surplus
+                    - normal_savings
+                    - (savings_contribution - normal_savings - personal_reduction),
+                    ZERO_MONEY,
+                ),
             )
-        snowball_before_adjustment = round(max(surplus - normal_savings, 0.0), 2)
-        snowball_reduction = round(
-            max(snowball_before_adjustment - snowball_amount, 0.0),
-            2,
+        snowball_before_adjustment = money(max(surplus - normal_savings, ZERO_MONEY))
+        snowball_reduction = money(
+            max(snowball_before_adjustment - snowball_amount, ZERO_MONEY),
         )
 
         return SavingsAllocation(
@@ -337,7 +356,7 @@ class BudgetEngine:
             projected_shortfall=projected_shortfall,
         )
 
-    def _savings_percentage(self) -> float:
+    def _savings_percentage(self) -> Decimal:
         """Return the scenario-specific savings percentage, or the default rule."""
         if self.savings_percentage_override is None:
             active_stage = self._active_savings_stage_for_balance()
@@ -345,32 +364,32 @@ class BudgetEngine:
                 active_stage is not None
                 and active_stage.savings_percentage_override is not None
             ):
-                return float(active_stage.savings_percentage_override)
-            return 0.50
+                return to_decimal(active_stage.savings_percentage_override)
+            return Decimal("0.50")
 
-        return float(self.savings_percentage_override)
+        return to_decimal(self.savings_percentage_override)
 
-    def _deadline_required_savings(self, goal, pay_date: date) -> float:
+    def _deadline_required_savings(self, goal, pay_date: date) -> Decimal:
         """Return the per-paycheck savings needed for a dated priority goal."""
         if goal is None or goal.target_date is None:
-            return 0.0
+            return ZERO_MONEY
 
         paychecks_remaining = self._eligible_paycheck_count(pay_date, goal.target_date)
         if paychecks_remaining <= 0:
-            return 0.0
+            return ZERO_MONEY
 
         amount_needed = max(
-            self._money_decimal(goal.target_amount - self._money_decimal(self.savings_balance)),
-            Decimal("0.00"),
+            money(goal.target_amount - money(self.savings_balance)),
+            ZERO_MONEY,
         )
-        if amount_needed == Decimal("0.00"):
-            return 0.0
+        if amount_needed == ZERO_MONEY:
+            return ZERO_MONEY
 
         required = (amount_needed / Decimal(paychecks_remaining)).quantize(
-            MONEY,
+            CENT,
             rounding=ROUND_CEILING,
         )
-        return float(required)
+        return money(required)
 
     def _eligible_paycheck_count(self, pay_date: date, target_date: date) -> int:
         """Count paychecks whose pay date can still fund a target-date goal."""
@@ -388,49 +407,49 @@ class BudgetEngine:
         self,
         goal,
         pay_date: date,
-        current_discretionary_savings: float,
-    ) -> float:
+        current_discretionary_savings: Decimal,
+    ) -> Decimal:
         """Return the personal allowance reduction needed after snowball redirect."""
         if goal is None or goal.target_date is None:
-            return 0.0
+            return ZERO_MONEY
 
         eligible_paychecks = self._eligible_paycheck_count(pay_date, goal.target_date)
         if eligible_paychecks <= 0:
-            return 0.0
+            return ZERO_MONEY
 
         projected_available = self._projected_available_surplus(
             pay_date,
             goal.target_date,
         )
         projected_shortfall = max(
-            self._money_decimal(
+            money(
                 goal.target_amount
-                - self._money_decimal(self.savings_balance)
+                - money(self.savings_balance)
                 - projected_available
             ),
-            Decimal("0.00"),
+            ZERO_MONEY,
         )
-        if projected_shortfall == Decimal("0.00"):
-            return 0.0
+        if projected_shortfall == ZERO_MONEY:
+            return ZERO_MONEY
 
         per_paycheck_gap = (projected_shortfall / Decimal(eligible_paychecks)).quantize(
-            MONEY,
+            CENT,
             rounding=ROUND_CEILING,
         )
         current_remaining_need = max(
-            self._money_decimal(
+            money(
                 goal.target_amount
-                - self._money_decimal(self.savings_balance)
-                - self._money_decimal(current_discretionary_savings)
+                - money(self.savings_balance)
+                - money(current_discretionary_savings)
             ),
-            Decimal("0.00"),
+            ZERO_MONEY,
         )
         reduction = min(
             per_paycheck_gap,
-            self._money_decimal(self.settings.personal_per_paycheck),
+            money(self.settings.personal_per_paycheck),
             current_remaining_need,
         )
-        return float(self._money_decimal(reduction))
+        return money(reduction)
 
     def _projected_available_surplus(
         self,
@@ -439,7 +458,7 @@ class BudgetEngine:
     ) -> Decimal:
         """Project post-required cash available through a savings deadline."""
         calendar_engine = CalendarEngine(self.settings)
-        total = Decimal("0.00")
+        total = ZERO_MONEY
         for period in calendar_engine.generate(target_date):
             if not start_pay_date <= period.pay_date <= target_date:
                 continue
@@ -447,38 +466,38 @@ class BudgetEngine:
             scheduled_payments = self.scheduler.payments_for_period(period)
             bills_paid = self._scheduled_bill_total(scheduled_payments)
             debt_minimums = self._scheduled_debt_minimum_total(scheduled_payments)
-            total += self._money_decimal(
+            total += money(
                 self._surplus_after_required_payments(
                     bills_paid=bills_paid,
                     debt_minimums=debt_minimums,
                 )
             )
 
-        return self._money_decimal(total)
+        return money(total)
 
     def _projected_shortfall_after_contribution(
         self,
         goal,
         pay_date: date,
-        savings_contribution: float,
-    ) -> float:
+        savings_contribution: Decimal,
+    ) -> Decimal:
         """Return projected deadline shortfall after future eligible paychecks."""
         if goal is None or goal.target_date is None:
-            return 0.0
+            return ZERO_MONEY
 
         projected_balance = self._projected_deadline_balance(
             goal=goal,
             pay_date=pay_date,
             balance_after_current=(
-                self._money_decimal(self.savings_balance)
-                + self._money_decimal(savings_contribution)
+                money(self.savings_balance)
+                + money(savings_contribution)
             ),
         )
         shortfall = max(
-            self._money_decimal(goal.target_amount - projected_balance),
-            Decimal("0.00"),
+            money(goal.target_amount - projected_balance),
+            ZERO_MONEY,
         )
-        return float(shortfall)
+        return money(shortfall)
 
     def _projected_deadline_balance(
         self,
@@ -488,9 +507,9 @@ class BudgetEngine:
     ) -> Decimal:
         """Project goal balance after all future eligible paychecks."""
         if goal.target_date is None or pay_date >= goal.target_date:
-            return self._money_decimal(min(balance_after_current, goal.target_amount))
+            return money(min(balance_after_current, goal.target_amount))
 
-        future_capacity = Decimal("0.00")
+        future_capacity = ZERO_MONEY
         calendar_engine = CalendarEngine(self.settings)
         for period in calendar_engine.generate(goal.target_date):
             if not pay_date < period.pay_date <= goal.target_date:
@@ -499,45 +518,43 @@ class BudgetEngine:
             scheduled_payments = self.scheduler.payments_for_period(period)
             bills_paid = self._scheduled_bill_total(scheduled_payments)
             debt_minimums = self._scheduled_debt_minimum_total(scheduled_payments)
-            future_capacity += self._money_decimal(
+            future_capacity += money(
                 self._surplus_after_required_payments(
                     bills_paid=bills_paid,
                     debt_minimums=debt_minimums,
                 )
             )
             if goal.funding_mode == SavingsFundingMode.DEADLINE_PRIORITY:
-                future_capacity += self._money_decimal(
+                future_capacity += money(
                     self.settings.personal_per_paycheck
                 )
 
-        return self._money_decimal(
+        return money(
             min(balance_after_current + future_capacity, goal.target_amount)
         )
 
-    def _debt_engine_snowball_amount(self, snowball_amount: float) -> float:
+    def _debt_engine_snowball_amount(self, snowball_amount: Decimal) -> Decimal:
         """Return the snowball amount to pass before debt-engine rollover is added."""
-        return round(
-            max(snowball_amount - self.debt_engine.freed_minimum_payment, 0.0),
-            2,
+        return money(
+            max(snowball_amount - self.debt_engine.freed_minimum_payment, ZERO_MONEY),
         )
 
     def _remaining_cash(
         self,
-        bills_paid: float,
-        debt_minimums: float,
-        savings_contribution: float,
-        snowball_payment: float,
-        personal_expense_reduction: float = 0.0,
-    ) -> float:
+        bills_paid: Decimal,
+        debt_minimums: Decimal,
+        savings_contribution: Decimal,
+        snowball_payment: Decimal,
+        personal_expense_reduction: Decimal = ZERO_MONEY,
+    ) -> Decimal:
         """Return cash left after all budgeted outflows."""
-        return round(
+        return money(
             self.settings.paycheck
             - bills_paid
             - debt_minimums
             - savings_contribution
             - snowball_payment
             + personal_expense_reduction,
-            2,
         )
 
     def _debt_balances(self, debts) -> list[DebtBalance]:
@@ -545,16 +562,12 @@ class BudgetEngine:
         return [
             DebtBalance(
                 name=debt["name"],
-                balance=round(debt["balance"], 2),
-                minimum=round(debt["minimum"], 2),
+                balance=money(debt["balance"]),
+                minimum=money(debt["minimum"]),
                 status=debt["status"],
             )
             for debt in debts
         ]
-
-    def _money_float(self, value) -> float:
-        """Convert Decimal-compatible money values to a rounded float."""
-        return float(Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP))
 
     def savings_stage_results(self) -> list[SavingsStageResult]:
         """Return savings stage progress snapshots."""
@@ -572,7 +585,7 @@ class BudgetEngine:
     def _process_savings_events(self, pay_date: date) -> dict[str, object]:
         context = {
             "balance_before_withdrawal": None,
-            "withdrawal_amount": 0.0,
+            "withdrawal_amount": ZERO_MONEY,
             "balance_after_withdrawal": None,
             "withdrawal_name": None,
             "stage_changed": False,
@@ -587,12 +600,12 @@ class BudgetEngine:
             if withdrawal.withdrawal_date > pay_date:
                 continue
 
-            before = self._money_decimal(self.savings_balance)
+            before = money(self.savings_balance)
             requested = before if withdrawal.drain_balance else withdrawal.amount
             actual = min(requested, before)
-            after = self._money_decimal(before - actual)
-            shortfall = self._money_decimal(requested - actual)
-            self.savings_balance = float(after)
+            after = money(before - actual)
+            shortfall = money(requested - actual)
+            self.savings_balance = after
             self._applied_withdrawal_indexes.add(index)
             self._withdrawal_results.append(
                 PlannedWithdrawalResult(
@@ -605,13 +618,13 @@ class BudgetEngine:
                     balance_after=after,
                     applied_date=pay_date,
                     shortfall=shortfall,
-                    status="applied" if shortfall == Decimal("0.00") else "partial",
+                    status="applied" if shortfall == ZERO_MONEY else "partial",
                 )
             )
             context = {
-                "balance_before_withdrawal": float(before),
-                "withdrawal_amount": float(actual),
-                "balance_after_withdrawal": float(after),
+                "balance_before_withdrawal": before,
+                "withdrawal_amount": actual,
+                "balance_after_withdrawal": after,
                 "withdrawal_name": withdrawal.name,
                 "stage_changed": True,
             }
@@ -646,12 +659,12 @@ class BudgetEngine:
             if goal.name == self._last_active_stage_name
         )
 
-    def _active_savings_target(self) -> float:
+    def _active_savings_target(self) -> Decimal:
         active_stage = self._active_savings_stage_for_balance()
         if active_stage is None:
             return self.settings.savings_goal
 
-        return float(active_stage.target_amount)
+        return money(active_stage.target_amount)
 
     def _savings_plan_enabled(self) -> bool:
         """Return whether deadline-priority savings plan behavior is active."""
@@ -665,7 +678,7 @@ class BudgetEngine:
             return
 
         if active_stage.starting_balance_override is not None:
-            self.savings_balance = float(active_stage.starting_balance_override)
+            self.savings_balance = money(active_stage.starting_balance_override)
 
         self._seen_stage_names.add(active_stage.name)
         self._stage_results[active_stage.name] = SavingsStageResult(
@@ -673,8 +686,8 @@ class BudgetEngine:
             start_date=active_stage.start_date,
             target_date=active_stage.target_date,
             target_amount=active_stage.target_amount,
-            starting_balance=self._money_decimal(self.savings_balance),
-            ending_balance=self._money_decimal(self.savings_balance),
+            starting_balance=money(self.savings_balance),
+            ending_balance=money(self.savings_balance),
             status=SavingsGoalStatus.ACTIVE,
         )
 
@@ -683,17 +696,17 @@ class BudgetEngine:
             return
 
         result = self._stage_results[active_stage.name]
-        result.ending_balance = self._money_decimal(self.savings_balance)
+        result.ending_balance = money(self.savings_balance)
         result.amount_needed = max(
-            self._money_decimal(active_stage.target_amount - result.ending_balance),
-            Decimal("0.00"),
+            money(active_stage.target_amount - result.ending_balance),
+            ZERO_MONEY,
         )
         result.eligible_paychecks_remaining = (
             self._eligible_paycheck_count(pay_date, active_stage.target_date)
             if active_stage.target_date is not None
             else 0
         )
-        result.projected_available_contributions = self._money_decimal(
+        result.projected_available_contributions = money(
             result.ending_balance - result.starting_balance
         )
         if active_stage.target_date is not None:
@@ -704,14 +717,14 @@ class BudgetEngine:
             )
             result.projected_balance_at_deadline = projected_balance
             result.projected_shortfall = max(
-                self._money_decimal(active_stage.target_amount - projected_balance),
-                Decimal("0.00"),
+                money(active_stage.target_amount - projected_balance),
+                ZERO_MONEY,
             )
             result.additional_funding_needed = result.projected_shortfall
             result.feasible_under_current_plan = (
                 projected_balance >= active_stage.target_amount
             )
-            result.projected_available_contributions = self._money_decimal(
+            result.projected_available_contributions = money(
                 projected_balance - result.starting_balance
             )
         if (
@@ -731,11 +744,11 @@ class BudgetEngine:
             if result.amount_at_deadline is not None:
                 continue
 
-            amount = self._money_decimal(self.savings_balance)
+            amount = money(self.savings_balance)
             result.amount_at_deadline = amount
             result.shortfall_at_deadline = max(
-                self._money_decimal(goal.target_amount - amount),
-                Decimal("0.00"),
+                money(goal.target_amount - amount),
+                ZERO_MONEY,
             )
             result.amount_needed = result.shortfall_at_deadline
             result.eligible_paychecks_remaining = 0
@@ -743,7 +756,7 @@ class BudgetEngine:
             result.projected_shortfall = result.shortfall_at_deadline
             result.additional_funding_needed = result.shortfall_at_deadline
             result.feasible_under_current_plan = (
-                result.shortfall_at_deadline == Decimal("0.00")
+                result.shortfall_at_deadline == ZERO_MONEY
             )
             if result.achieved_date is None and amount >= goal.target_amount:
                 result.achieved_date = goal.target_date
@@ -763,7 +776,7 @@ class BudgetEngine:
                     start_date=goal.start_date,
                     target_date=goal.target_date,
                     target_amount=goal.target_amount,
-                    starting_balance=Decimal("0.00"),
+                    starting_balance=ZERO_MONEY,
                     status=SavingsGoalStatus.UPCOMING,
                 )
             result = self._stage_results[goal.name]
@@ -795,12 +808,11 @@ class BudgetEngine:
 
         return (achieved_date - goal.target_date).days
 
-    def _goal_progress_percentage(self) -> float | None:
+    def _goal_progress_percentage(self) -> Decimal | None:
         target = self._active_savings_target()
-        if target <= 0:
+        if target <= ZERO_MONEY:
             return None
 
-        return round(min(self.savings_balance / target, 1.0), 4)
-
-    def _money_decimal(self, value) -> Decimal:
-        return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
+        return min(self.savings_balance / target, Decimal("1")).quantize(
+            Decimal("0.0001")
+        )
