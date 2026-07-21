@@ -6,12 +6,22 @@ DebtSnowball
 
 from copy import deepcopy
 from datetime import date
+from decimal import Decimal
 
 from app.budget_engine import BudgetEngine
 from app.calendar_engine import CalendarEngine
 from app.config import Config
 from app.excel_writer import ExcelWriter
 from app.forecast_engine import ForecastEngine
+from app.models import ScenarioDefinition
+from app.scenario_engine import ScenarioEngine
+
+
+DEFAULT_SCENARIO_DEFINITIONS = [
+    ScenarioDefinition(name="Extra $50", extra_per_paycheck=Decimal("50.00")),
+    ScenarioDefinition(name="Extra $100", extra_per_paycheck=Decimal("100.00")),
+    ScenarioDefinition(name="Extra $250", extra_per_paycheck=Decimal("250.00")),
+]
 
 
 def main():
@@ -27,7 +37,11 @@ def main():
     budget = BudgetEngine(config)
     summaries = budget.build_plan(periods)
     forecast = ForecastEngine(forecast_config).forecast()
-    workbook_path = ExcelWriter().write(summaries, forecast)
+    scenario_comparison = ScenarioEngine(
+        forecast_config,
+        DEFAULT_SCENARIO_DEFINITIONS,
+    ).compare()
+    workbook_path = ExcelWriter().write(summaries, forecast, scenario_comparison)
 
     print()
 

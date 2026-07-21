@@ -1,9 +1,14 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
 from app.debt_engine import DebtEngine
 from app.models import Debt, ScheduledPayment
+
+
+def money(value) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
 def test_debt_interest_calculation_uses_paycheck_rate():
@@ -121,3 +126,81 @@ def test_freed_minimum_is_not_double_counted_in_process_pay_period_regression():
     assert result["minimums"] == {"A": 50.0}
     assert result["snowball"] == {"B": 100.0}
     assert result["freed_minimum_payment"] == 50.0
+
+
+def test_snowball_targets_correct_debt_and_rolls_over_after_payoff_regression():
+    debts = [
+        Debt("Debt A", balance="100.00", apr="0", minimum="10.00", due_day=1, snowball_order=1),
+        Debt("Debt B", balance="200.00", apr="0", minimum="20.00", due_day=1, snowball_order=2),
+        Debt("Debt C", balance="300.00", apr="0", minimum="30.00", due_day=1, snowball_order=3),
+    ]
+    period_one_scheduled = [
+        ScheduledPayment("Debt A", 10, date(2026, 1, 1), "debt"),
+        ScheduledPayment("Debt B", 20, date(2026, 1, 1), "debt"),
+        ScheduledPayment("Debt C", 30, date(2026, 1, 1), "debt"),
+    ]
+    engine = DebtEngine(debts)
+
+    period_one = engine.process_pay_period(period_one_scheduled, snowball_amount=150)
+
+    assert period_one["minimums"] == {"Debt A": 10.0, "Debt B": 20.0, "Debt C": 30.0}
+    assert period_one["snowball"] == {"Debt A": 90.0, "Debt B": 60.0}
+    assert "Debt C" not in period_one["snowball"]
+    assert money(debts[0].balance) == Decimal("0.00")
+    assert money(debts[1].balance) == Decimal("120.00")
+    assert money(debts[2].balance) == Decimal("270.00")
+    assert money(debts[0].total_paid) == Decimal("100.00")
+    assert money(debts[1].total_paid) == Decimal("80.00")
+    assert money(debts[2].total_paid) == Decimal("30.00")
+    assert money(sum(period_one["minimums"].values())) == Decimal("60.00")
+    assert money(sum(period_one["snowball"].values())) == Decimal("150.00")
+    assert money(sum(debt.total_paid for debt in debts)) == Decimal("210.00")
+    assert [debt["name"] for debt in period_one["paid_off_debts"]] == ["Debt A"]
+    assert [debt.name for debt in engine.paid_off_debts] == ["Debt A"]
+
+    period_two_scheduled = [
+        ScheduledPayment("Debt B", 20, date(2026, 1, 15), "debt"),
+        ScheduledPayment("Debt C", 30, date(2026, 1, 15), "debt"),
+    ]
+
+    period_two = engine.process_pay_period(period_two_scheduled, snowball_amount=40)
+
+    assert period_two["minimums"] == {"Debt B": 20.0, "Debt C": 30.0}
+    assert period_two["snowball"] == {"Debt B": 50.0}
+    assert "Debt A" not in period_two["minimums"]
+    assert "Debt A" not in period_two["snowball"]
+    assert "Debt C" not in period_two["snowball"]
+    assert money(debts[0].balance) == Decimal("0.00")
+    assert money(debts[1].balance) == Decimal("50.00")
+    assert money(debts[2].balance) == Decimal("240.00")
+    assert [debt["name"] for debt in period_two["active_debts"]] == ["Debt B", "Debt C"]
+    assert [debt["name"] for debt in period_two["paid_off_debts"]] == ["Debt A"]
+    assert [debt.name for debt in engine.paid_off_debts] == ["Debt A"]
+
+
+def test_interest_accrues_before_minimums_and_snowball_targeting_regression():
+    debts = [
+        Debt("Debt A", balance="100.00", apr="26", minimum="10.00", due_day=1, snowball_order=1),
+        Debt("Debt B", balance="200.00", apr="26", minimum="20.00", due_day=1, snowball_order=2),
+        Debt("Debt C", balance="300.00", apr="26", minimum="30.00", due_day=1, snowball_order=3),
+    ]
+    scheduled = [
+        ScheduledPayment("Debt A", 10, date(2026, 1, 1), "debt"),
+        ScheduledPayment("Debt B", 20, date(2026, 1, 1), "debt"),
+        ScheduledPayment("Debt C", 30, date(2026, 1, 1), "debt"),
+    ]
+    engine = DebtEngine(debts)
+
+    result = engine.process_pay_period(scheduled, snowball_amount=95)
+
+    assert result["interest"] == {"Debt A": 1.0, "Debt B": 2.0, "Debt C": 3.0}
+    assert result["minimums"] == {"Debt A": 10.0, "Debt B": 20.0, "Debt C": 30.0}
+    assert result["snowball"] == {"Debt A": 91.0, "Debt B": 4.0}
+    assert "Debt C" not in result["snowball"]
+    assert money(debts[0].balance) == Decimal("0.00")
+    assert money(debts[1].balance) == Decimal("178.00")
+    assert money(debts[2].balance) == Decimal("273.00")
+    assert [debt["name"] for debt in result["active_debts"]] == ["Debt B", "Debt C"]
+    assert [debt["name"] for debt in result["paid_off_debts"]] == ["Debt A"]
+    assert money(debts[1].total_interest_paid) == Decimal("2.00")
+    assert money(debts[2].total_interest_paid) == Decimal("3.00")

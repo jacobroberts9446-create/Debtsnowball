@@ -7,13 +7,13 @@ Writes budget summaries to an Excel workbook.
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.chart import LineChart, Reference
+from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.budget_engine import PayPeriodSummary
-from app.models import ForecastSummary
+from app.models import ForecastSummary, ScenarioComparison, ScenarioResult
 
 
 class ExcelWriter:
@@ -26,6 +26,7 @@ class ExcelWriter:
         self,
         summaries: list[PayPeriodSummary],
         forecast: ForecastSummary | None = None,
+        scenario_comparison: ScenarioComparison | None = None,
     ) -> Path:
         """Write pay-period, debt, payoff, and savings worksheets."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +44,11 @@ class ExcelWriter:
             workbook.create_sheet("Savings Progress"), summaries
         )
         self._write_forecast(workbook.create_sheet("Forecast"), forecast)
-        self._write_dashboard(dashboard_sheet, summaries, forecast)
+        self._write_scenario_comparison(
+            workbook.create_sheet("Scenario Comparison"),
+            scenario_comparison,
+        )
+        self._write_dashboard(dashboard_sheet, summaries, forecast, scenario_comparison)
 
         workbook.save(self.path)
         return self.path
@@ -174,6 +179,7 @@ class ExcelWriter:
         sheet: Worksheet,
         summaries: list[PayPeriodSummary],
         forecast: ForecastSummary | None = None,
+        scenario_comparison: ScenarioComparison | None = None,
     ) -> None:
         sheet["A1"] = "DebtSnowball Dashboard"
         sheet["A1"].font = Font(bold=True, size=16)
@@ -182,7 +188,7 @@ class ExcelWriter:
         sheet["A3"] = "Metric"
         sheet["B3"] = "Value"
 
-        metrics = self._dashboard_metrics(summaries, forecast)
+        metrics = self._dashboard_metrics(summaries, forecast, scenario_comparison)
         for index, (label, value, number_format) in enumerate(metrics, start=4):
             sheet.cell(row=index, column=1, value=label)
             value_cell = sheet.cell(row=index, column=2, value=value)
@@ -202,6 +208,7 @@ class ExcelWriter:
         self,
         summaries: list[PayPeriodSummary],
         forecast: ForecastSummary | None = None,
+        scenario_comparison: ScenarioComparison | None = None,
     ) -> list[tuple[str, object, str]]:
         if not summaries:
             metrics: list[tuple[str, object, str]] = []
@@ -256,7 +263,486 @@ class ExcelWriter:
                 ]
             )
 
+        metrics.extend(self._scenario_dashboard_metrics(scenario_comparison))
         return metrics
+
+    def _scenario_dashboard_metrics(
+        self,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> list[tuple[str, object, str]]:
+        best = self._best_completed_scenario(scenario_comparison)
+        if best is None:
+            return [
+                ("Best Scenario", "No scenario completed within horizon", "@"),
+                ("Earliest Debt-Free Date", None, "mmm d, yyyy"),
+                ("Maximum Interest Saved", 0.0, "$#,##0.00"),
+                ("Extra Payment Required", 0.0, "$#,##0.00"),
+            ]
+
+        baseline = scenario_comparison.baseline.forecast
+        return [
+            ("Best Scenario", best.name, "@"),
+            ("Earliest Debt-Free Date", best.forecast.debt_free_date, "mmm d, yyyy"),
+            (
+                "Maximum Interest Saved",
+                self._cell_value(
+                    baseline.total_interest_paid - best.forecast.total_interest_paid
+                ),
+                "$#,##0.00",
+            ),
+            (
+                "Extra Payment Required",
+                self._cell_value(best.extra_per_paycheck),
+                "$#,##0.00",
+            ),
+        ]
+
+    def _write_scenario_comparison(
+        self,
+        sheet: Worksheet,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> None:
+        """Write scenario summary, deltas, payoff comparison, and charts."""
+        sheet["A1"] = "Scenario Comparison"
+        sheet["A1"].font = Font(bold=True, size=16)
+        sheet.merge_cells("A1:M1")
+
+        summary_header_row = 3
+        summary_rows = self._scenario_summary_rows(scenario_comparison)
+        summary_headers = [
+            "Scenario",
+            "Extra Per Paycheck",
+            "Debt-Free Date",
+            "Days Saved",
+            "Savings Goal Date",
+            "Savings Goal Days Changed",
+            "Total Interest",
+            "Interest Saved",
+            "Total Snowball Paid",
+            "Additional Snowball Paid",
+            "Ending Debt",
+            "Ending Savings",
+            "Completed",
+        ]
+        self._write_header(sheet, summary_header_row, summary_headers)
+        for row_index, row in enumerate(summary_rows, start=summary_header_row + 1):
+            for column_index, value in enumerate(row, start=1):
+                sheet.cell(row=row_index, column=column_index, value=value)
+
+        deltas_header_row = summary_header_row + max(len(summary_rows), 1) + 3
+        sheet.cell(row=deltas_header_row - 1, column=1, value="Scenario Deltas")
+        sheet.cell(row=deltas_header_row - 1, column=1).font = Font(bold=True)
+        delta_headers = [
+            "Scenario",
+            "Debt-Free Days Saved",
+            "Savings Goal Days Changed",
+            "Interest Saved",
+            "Additional Snowball Paid",
+            "Ending Debt Difference",
+            "Ending Savings Difference",
+        ]
+        self._write_header(sheet, deltas_header_row, delta_headers)
+        delta_rows = self._scenario_delta_rows(scenario_comparison)
+        for row_index, row in enumerate(delta_rows, start=deltas_header_row + 1):
+            for column_index, value in enumerate(row, start=1):
+                sheet.cell(row=row_index, column=column_index, value=value)
+
+        payoff_header_row = deltas_header_row + max(len(delta_rows), 1) + 3
+        sheet.cell(row=payoff_header_row - 1, column=1, value="Debt Payoff Comparison")
+        sheet.cell(row=payoff_header_row - 1, column=1).font = Font(bold=True)
+        payoff_headers = self._debt_payoff_headers(scenario_comparison)
+        self._write_header(sheet, payoff_header_row, payoff_headers)
+        payoff_rows = self._debt_payoff_rows(scenario_comparison)
+        for row_index, row in enumerate(payoff_rows, start=payoff_header_row + 1):
+            for column_index, value in enumerate(row, start=1):
+                sheet.cell(row=row_index, column=column_index, value=value)
+
+        chart_data_header_row = payoff_header_row + max(len(payoff_rows), 1) + 3
+        self._write_scenario_chart_data(
+            sheet,
+            scenario_comparison,
+            chart_data_header_row,
+        )
+        self._format_scenario_sheet(
+            sheet=sheet,
+            summary_header_row=summary_header_row,
+            summary_row_count=len(summary_rows),
+            deltas_header_row=deltas_header_row,
+            delta_row_count=len(delta_rows),
+            payoff_header_row=payoff_header_row,
+            payoff_column_count=len(payoff_headers),
+            chart_data_header_row=chart_data_header_row,
+        )
+        self._add_scenario_charts(sheet, chart_data_header_row, len(summary_rows))
+
+    def _scenario_summary_rows(
+        self,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> list[list[object]]:
+        if scenario_comparison is None:
+            return []
+
+        baseline = scenario_comparison.baseline.forecast
+        rows = [
+            self._scenario_summary_row(
+                scenario_comparison.baseline,
+                baseline,
+                is_baseline=True,
+            )
+        ]
+        rows.extend(
+            self._scenario_summary_row(scenario, baseline)
+            for scenario in scenario_comparison.scenarios
+        )
+        return rows
+
+    def _scenario_summary_row(
+        self,
+        scenario: ScenarioResult,
+        baseline,
+        is_baseline: bool = False,
+    ) -> list[object]:
+        forecast = scenario.forecast
+        debt_free_days_saved = self._days_saved(
+            baseline.debt_free_date,
+            forecast.debt_free_date,
+        )
+        savings_goal_days_changed = self._days_saved(
+            baseline.savings_goal_date,
+            forecast.savings_goal_date,
+        )
+
+        return [
+            scenario.name,
+            self._cell_value(scenario.extra_per_paycheck),
+            forecast.debt_free_date,
+            0
+            if is_baseline
+            else debt_free_days_saved
+            if debt_free_days_saved is not None
+            else None,
+            forecast.savings_goal_date,
+            0
+            if is_baseline
+            else savings_goal_days_changed
+            if savings_goal_days_changed is not None
+            else None,
+            self._cell_value(forecast.total_interest_paid),
+            0.0
+            if is_baseline
+            else self._cell_value(
+                baseline.total_interest_paid - forecast.total_interest_paid
+            ),
+            self._cell_value(forecast.total_snowball_payments),
+            0.0
+            if is_baseline
+            else self._cell_value(
+                forecast.total_snowball_payments - baseline.total_snowball_payments
+            ),
+            self._cell_value(forecast.remaining_debt),
+            self._cell_value(forecast.ending_savings),
+            forecast.completed,
+        ]
+
+    def _scenario_delta_rows(
+        self,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> list[list[object]]:
+        if scenario_comparison is None:
+            return []
+
+        baseline = scenario_comparison.baseline.forecast
+        return [
+            [
+                scenario.name,
+                self._days_saved(
+                    baseline.debt_free_date,
+                    scenario.forecast.debt_free_date,
+                ),
+                self._days_saved(
+                    baseline.savings_goal_date,
+                    scenario.forecast.savings_goal_date,
+                ),
+                self._cell_value(
+                    baseline.total_interest_paid - scenario.forecast.total_interest_paid
+                ),
+                self._cell_value(
+                    scenario.forecast.total_snowball_payments
+                    - baseline.total_snowball_payments
+                ),
+                self._cell_value(
+                    scenario.forecast.remaining_debt - baseline.remaining_debt
+                ),
+                self._cell_value(
+                    scenario.forecast.ending_savings - baseline.ending_savings
+                ),
+            ]
+            for scenario in scenario_comparison.scenarios
+        ]
+
+    def _debt_payoff_headers(
+        self,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> list[str]:
+        if scenario_comparison is None:
+            return ["Debt", "Baseline"]
+
+        return [
+            "Debt",
+            *[scenario.name for scenario in self._scenario_results(scenario_comparison)],
+        ]
+
+    def _debt_payoff_rows(
+        self,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> list[list[object]]:
+        if scenario_comparison is None:
+            return []
+
+        results = self._scenario_results(scenario_comparison)
+        debt_names = self._scenario_debt_names(results)
+        return [
+            [
+                debt_name,
+                *[
+                    self._payoff_date_for_debt(result, debt_name)
+                    for result in results
+                ],
+            ]
+            for debt_name in debt_names
+        ]
+
+    def _write_scenario_chart_data(
+        self,
+        sheet: Worksheet,
+        scenario_comparison: ScenarioComparison | None,
+        header_row: int,
+    ) -> None:
+        self._write_header(
+            sheet,
+            header_row,
+            ["Scenario", "Total Interest", "Days To Debt-Free"],
+        )
+        if scenario_comparison is None:
+            return
+
+        for row_index, result in enumerate(
+            self._scenario_results(scenario_comparison),
+            start=header_row + 1,
+        ):
+            forecast = result.forecast
+            days_to_debt_free = self._days_between(
+                forecast.forecast_start_date,
+                forecast.debt_free_date,
+            )
+            sheet.cell(row=row_index, column=1, value=result.name)
+            sheet.cell(
+                row=row_index,
+                column=2,
+                value=self._cell_value(forecast.total_interest_paid),
+            )
+            sheet.cell(row=row_index, column=3, value=days_to_debt_free)
+
+    def _format_scenario_sheet(
+        self,
+        sheet: Worksheet,
+        summary_header_row: int,
+        summary_row_count: int,
+        deltas_header_row: int,
+        delta_row_count: int,
+        payoff_header_row: int,
+        payoff_column_count: int,
+        chart_data_header_row: int,
+    ) -> None:
+        header_rows = [
+            summary_header_row,
+            deltas_header_row,
+            payoff_header_row,
+            chart_data_header_row,
+        ]
+        for header_row in header_rows:
+            for cell in sheet[header_row]:
+                if cell.value is not None:
+                    self._style_header_cell(cell)
+
+        currency_columns = ["B", "G", "H", "I", "J", "K", "L"]
+        date_columns = ["C", "E"]
+        integer_columns = ["D", "F"]
+        for column_letter in currency_columns:
+            for cell in sheet[column_letter][summary_header_row:]:
+                cell.number_format = "$#,##0.00"
+        for column_letter in date_columns:
+            for cell in sheet[column_letter][summary_header_row:]:
+                cell.number_format = "mmm d, yyyy"
+        for column_letter in integer_columns:
+            for cell in sheet[column_letter][summary_header_row:]:
+                cell.number_format = "0"
+
+        for column_letter in ["D", "E", "F", "G"]:
+            for cell in sheet[column_letter][deltas_header_row:payoff_header_row - 1]:
+                cell.number_format = "$#,##0.00"
+        for column_letter in ["B", "C"]:
+            for cell in sheet[column_letter][deltas_header_row:payoff_header_row - 1]:
+                cell.number_format = "0"
+
+        for row in sheet.iter_rows(
+            min_row=payoff_header_row + 1,
+            max_row=sheet.max_row,
+            min_col=2,
+            max_col=max(payoff_column_count, 2),
+        ):
+            for cell in row:
+                if hasattr(cell.value, "year"):
+                    cell.number_format = "mmm d, yyyy"
+
+        sheet.column_dimensions["A"].width = 26
+        for column_index, column in enumerate(sheet.columns, start=1):
+            max_length = max(
+                len(str(cell.value)) if cell.value is not None else 0 for cell in column
+            )
+            sheet.column_dimensions[get_column_letter(column_index)].width = min(
+                max(max_length + 2, 12),
+                34,
+            )
+
+        sheet.freeze_panes = "A4"
+        sheet.auto_filter.ref = (
+            f"A{summary_header_row}:M{summary_header_row + summary_row_count}"
+        )
+        sheet.cell(row=chart_data_header_row - 1, column=1, value="Chart Data")
+        sheet.cell(row=chart_data_header_row - 1, column=1).font = Font(bold=True)
+
+    def _add_scenario_charts(
+        self,
+        sheet: Worksheet,
+        chart_data_header_row: int,
+        scenario_count: int,
+    ) -> None:
+        if scenario_count == 0:
+            return
+
+        max_row = chart_data_header_row + scenario_count
+        categories = Reference(
+            sheet,
+            min_col=1,
+            min_row=chart_data_header_row + 1,
+            max_row=max_row,
+        )
+
+        interest_chart = BarChart()
+        interest_chart.title = "Interest by Scenario"
+        interest_chart.y_axis.title = "Total Interest"
+        interest_chart.x_axis.title = "Scenario"
+        interest_chart.add_data(
+            Reference(sheet, min_col=2, min_row=chart_data_header_row, max_row=max_row),
+            titles_from_data=True,
+        )
+        interest_chart.set_categories(categories)
+        interest_chart.height = 7
+        interest_chart.width = 14
+        sheet.add_chart(interest_chart, "O3")
+
+        timeline_chart = BarChart()
+        timeline_chart.title = "Debt-Free Timeline by Scenario"
+        timeline_chart.y_axis.title = "Days To Debt-Free"
+        timeline_chart.x_axis.title = "Scenario"
+        timeline_chart.add_data(
+            Reference(sheet, min_col=3, min_row=chart_data_header_row, max_row=max_row),
+            titles_from_data=True,
+        )
+        timeline_chart.set_categories(categories)
+        timeline_chart.height = 7
+        timeline_chart.width = 14
+        sheet.add_chart(timeline_chart, "O20")
+
+    def _write_header(
+        self,
+        sheet: Worksheet,
+        row: int,
+        headers: list[str],
+    ) -> None:
+        for column_index, header in enumerate(headers, start=1):
+            cell = sheet.cell(row=row, column=column_index, value=header)
+            self._style_header_cell(cell)
+
+    def _style_header_cell(self, cell) -> None:
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
+        cell.font = Font(color="FFFFFF", bold=True)
+
+    def _scenario_results(
+        self,
+        scenario_comparison: ScenarioComparison,
+    ) -> list[ScenarioResult]:
+        return [scenario_comparison.baseline, *scenario_comparison.scenarios]
+
+    def _scenario_debt_names(self, results: list[ScenarioResult]) -> list[str]:
+        debt_names = []
+        seen = set()
+        for result in results:
+            for payoff in result.debt_payoffs:
+                if payoff.debt_name in seen:
+                    continue
+
+                seen.add(payoff.debt_name)
+                debt_names.append(payoff.debt_name)
+
+        return debt_names
+
+    def _payoff_date_for_debt(
+        self,
+        result: ScenarioResult,
+        debt_name: str,
+    ) -> object:
+        for payoff in result.debt_payoffs:
+            if payoff.debt_name != debt_name:
+                continue
+
+            return payoff.payoff_date or "Not paid within horizon"
+
+        return "Not paid within horizon"
+
+    def _days_saved(
+        self,
+        baseline_date,
+        scenario_date,
+    ) -> int | None:
+        if baseline_date is None or scenario_date is None:
+            return None
+
+        return (baseline_date - scenario_date).days
+
+    def _days_between(
+        self,
+        start_date,
+        end_date,
+    ) -> int | None:
+        if start_date is None or end_date is None:
+            return None
+
+        return (end_date - start_date).days
+
+    def _best_completed_scenario(
+        self,
+        scenario_comparison: ScenarioComparison | None,
+    ) -> ScenarioResult | None:
+        if scenario_comparison is None:
+            return None
+
+        completed = [
+            result
+            for result in self._scenario_results(scenario_comparison)
+            if result.forecast.debt_free_date is not None
+        ]
+        if not completed:
+            return None
+
+        return min(
+            completed,
+            key=lambda result: (
+                result.forecast.debt_free_date,
+                result.extra_per_paycheck,
+            ),
+        )
 
     def _write_forecast(
         self,
@@ -440,6 +926,7 @@ class ExcelWriter:
         )
         debt_chart.add_data(debt_data, titles_from_data=True)
         debt_chart.set_categories(categories)
+        self._format_date_chart_axis(debt_chart)
         debt_chart.height = 7
         debt_chart.width = 14
         sheet.add_chart(debt_chart, "G3")
@@ -456,6 +943,7 @@ class ExcelWriter:
         )
         savings_chart.add_data(savings_data, titles_from_data=True)
         savings_chart.set_categories(categories)
+        self._format_date_chart_axis(savings_chart)
         savings_chart.height = 7
         savings_chart.width = 14
         sheet.add_chart(savings_chart, "G20")
@@ -484,6 +972,7 @@ class ExcelWriter:
         )
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(categories)
+        self._format_date_chart_axis(chart)
         chart.height = 7
         chart.width = 14
 
@@ -513,10 +1002,17 @@ class ExcelWriter:
         )
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(categories)
+        self._format_date_chart_axis(chart)
         chart.height = 7
         chart.width = 14
 
         sheet.add_chart(chart, "D20")
+
+    def _format_date_chart_axis(self, chart: LineChart) -> None:
+        """Format date-based chart categories with readable labels."""
+        chart.x_axis.number_format = "mmm d"
+        chart.x_axis.majorTickMark = "out"
+        chart.x_axis.tickLblPos = "low"
 
     def _format_table(
         self,

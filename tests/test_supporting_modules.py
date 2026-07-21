@@ -210,11 +210,13 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
         "Paid-Off Debts",
         "Savings Progress",
         "Forecast",
+        "Scenario Comparison",
     ]
     assert len(workbook["Dashboard"]._charts) == 2
     assert workbook["Dashboard"]["A12"].value == "Estimated Debt-Free Date"
     assert workbook["Dashboard"]["B14"].value == 25.0
     assert workbook["Dashboard"].freeze_panes == "A4"
+    assert workbook["Dashboard"]._charts[0].x_axis.number_format.formatCode == "mmm d"
     assert workbook["Pay Period Summaries"].auto_filter.ref == "A1:K3"
     assert workbook["Active Debts"].max_row == 4
     assert workbook["Paid-Off Debts"].max_row == 2
@@ -225,6 +227,7 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     assert workbook["Forecast"]["A19"].value == "Paycheck Date"
     assert workbook["Forecast"].auto_filter.ref == "A19:E21"
     assert len(workbook["Forecast"]._charts) == 2
+    assert workbook["Forecast"]._charts[0].x_axis.number_format.formatCode == "mmm d"
     workbook.close()
 
 
@@ -235,6 +238,7 @@ def test_excel_writer_handles_empty_forecast(tmp_path):
 
     workbook = load_workbook(workbook_path)
     assert "Forecast" in workbook.sheetnames
+    assert "Scenario Comparison" in workbook.sheetnames
     assert workbook["Forecast"]["A1"].value == "Forecast"
     assert workbook["Forecast"]["A4"].value == "Estimated Debt-Free Date"
     assert len(workbook["Forecast"]._charts) == 0
