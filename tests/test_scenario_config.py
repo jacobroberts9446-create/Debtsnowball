@@ -7,10 +7,11 @@ from openpyxl import load_workbook
 
 from app.config import Config
 from app.excel_writer import ExcelWriter
-from run import build_scenario_comparison
+from app.models import DebtFreeTargetStatus
+from run import build_debt_free_target_result, build_scenario_comparison
 
 
-def config_data(scenarios_marker="missing"):
+def config_data(scenarios_marker="missing", target_marker="missing"):
     data = {
         "budget": {
             "paycheck": 500,
@@ -52,6 +53,8 @@ def config_data(scenarios_marker="missing"):
     }
     if scenarios_marker != "missing":
         data["scenarios"] = scenarios_marker
+    if target_marker != "missing":
+        data["debt_free_target"] = target_marker
 
     return data
 
@@ -314,3 +317,127 @@ def test_excel_contains_only_baseline_plus_configured_scenarios_in_order(tmp_pat
     ]
     assert sheet["A7"].value is None
     workbook.close()
+
+
+def test_missing_target_section_is_disabled(tmp_path):
+    config = load_config(tmp_path, config_data())
+
+    assert config.debt_free_target.enabled is False
+
+
+def test_disabled_target_section_is_disabled(tmp_path):
+    config = load_config(
+        tmp_path,
+        config_data(target_marker={"enabled": False}),
+    )
+
+    assert config.debt_free_target.enabled is False
+
+
+def test_enabled_valid_target_section_parses(tmp_path):
+    config = load_config(
+        tmp_path,
+        config_data(
+            target_marker={
+                "enabled": True,
+                "target_date": "2026-01-30",
+                "maximum_extra_per_paycheck": "250.00",
+                "precision": "0.10",
+                "maximum_iterations": 25,
+            }
+        ),
+    )
+
+    assert config.debt_free_target.enabled is True
+    assert config.debt_free_target.target_date == date(2026, 1, 30)
+    assert config.debt_free_target.maximum_extra_per_paycheck == Decimal("250.00")
+    assert config.debt_free_target.precision == Decimal("0.10")
+    assert config.debt_free_target.maximum_iterations == 25
+
+
+@pytest.mark.parametrize(
+    ("target_marker", "message"),
+    [
+        ({"enabled": True}, "target_date"),
+        ({"enabled": True, "target_date": "01/30/2026"}, "YYYY-MM-DD"),
+        ({"enabled": "yes", "target_date": "2026-01-30"}, "boolean"),
+        (
+            {
+                "enabled": True,
+                "target_date": "2026-01-30",
+                "maximum_extra_per_paycheck": "-0.01",
+            },
+            "negative",
+        ),
+        (
+            {
+                "enabled": True,
+                "target_date": "2026-01-30",
+                "maximum_extra_per_paycheck": "NaN",
+            },
+            "finite",
+        ),
+        (
+            {
+                "enabled": True,
+                "target_date": "2026-01-30",
+                "precision": "0.00",
+            },
+            "greater than zero",
+        ),
+        (
+            {
+                "enabled": True,
+                "target_date": "2026-01-30",
+                "maximum_iterations": 0,
+            },
+            "positive",
+        ),
+        (
+            {
+                "enabled": True,
+                "target_date": "2026-01-30",
+                "maximum_iterations": "ten",
+            },
+            "integer",
+        ),
+    ],
+)
+def test_invalid_target_configuration_is_rejected(tmp_path, target_marker, message):
+    with pytest.raises(ValueError, match=message):
+        load_config(tmp_path, config_data(target_marker=target_marker))
+
+
+def test_backward_compatibility_with_old_config_has_disabled_target(tmp_path):
+    config = load_config(tmp_path, config_data())
+
+    assert config.scenarios == []
+    assert config.debt_free_target.enabled is False
+
+
+def test_run_orchestration_returns_none_when_target_disabled(tmp_path):
+    config = load_config(tmp_path, config_data(target_marker={"enabled": False}))
+
+    assert build_debt_free_target_result(config) is None
+
+
+def test_run_orchestration_calculates_when_target_enabled(tmp_path):
+    config = load_config(
+        tmp_path,
+        config_data(
+            target_marker={
+                "enabled": True,
+                "target_date": "2026-01-16",
+                "maximum_extra_per_paycheck": "1000.00",
+                "precision": "0.01",
+            }
+        ),
+    )
+
+    result = build_debt_free_target_result(config)
+
+    assert result.target_met is True
+    assert result.calculation_status in {
+        DebtFreeTargetStatus.TARGET_MET,
+        DebtFreeTargetStatus.ALREADY_ON_TRACK,
+    }

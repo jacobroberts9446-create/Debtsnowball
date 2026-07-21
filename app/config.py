@@ -13,6 +13,7 @@ from app.models import (
     Bill,
     BudgetSettings,
     Debt,
+    DebtFreeTargetRequest,
     ScenarioDefinition,
 )
 
@@ -26,6 +27,7 @@ class Config:
         self.bills = []
         self.debts = []
         self.scenarios: list[ScenarioDefinition] = []
+        self.debt_free_target = DebtFreeTargetRequest(enabled=False)
 
     def load(self: Self, filename: str | Path = "config.json") -> Self:
         """Load budget settings, bills, and debts from a JSON file."""
@@ -65,8 +67,82 @@ class Config:
             [Debt(**debt) for debt in data["debts"]], key=lambda d: d.snowball_order
         )
         self.scenarios = self._load_scenarios(data.get("scenarios"))
+        self.debt_free_target = self._load_debt_free_target(
+            data.get("debt_free_target")
+        )
 
         return self
+
+    def _load_debt_free_target(self, raw_target) -> DebtFreeTargetRequest:
+        """Parse optional debt-free target calculator configuration."""
+        if raw_target is None:
+            return DebtFreeTargetRequest(enabled=False)
+        if not isinstance(raw_target, dict):
+            raise ValueError("debt_free_target must be an object.")
+
+        enabled = raw_target.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("debt_free_target enabled must be boolean.")
+        if not enabled:
+            return DebtFreeTargetRequest(enabled=False)
+
+        if "target_date" not in raw_target:
+            raise ValueError("debt_free_target target_date is required when enabled.")
+
+        target_date = self._iso_date(
+            raw_target["target_date"],
+            "debt_free_target target_date",
+        )
+        maximum_extra = self._decimal_config_value(
+            raw_target.get("maximum_extra_per_paycheck", Decimal("10000.00")),
+            "debt_free_target maximum_extra_per_paycheck",
+        )
+        if maximum_extra < Decimal("0.00"):
+            raise ValueError(
+                "debt_free_target maximum_extra_per_paycheck cannot be negative."
+            )
+
+        precision = self._decimal_config_value(
+            raw_target.get("precision", Decimal("0.01")),
+            "debt_free_target precision",
+        )
+        if precision <= Decimal("0.00"):
+            raise ValueError("debt_free_target precision must be greater than zero.")
+
+        maximum_iterations = self._positive_int_config_value(
+            raw_target.get("maximum_iterations", 100),
+            "debt_free_target maximum_iterations",
+        )
+        if maximum_iterations <= 0:
+            raise ValueError("debt_free_target maximum_iterations must be positive.")
+
+        return DebtFreeTargetRequest(
+            enabled=True,
+            target_date=target_date,
+            maximum_extra_per_paycheck=maximum_extra,
+            precision=precision,
+            maximum_iterations=maximum_iterations,
+        )
+
+    def _positive_int_config_value(self, value, label: str) -> int:
+        """Parse a positive integer config value from JSON Decimal/int values."""
+        if isinstance(value, bool):
+            raise ValueError(f"{label} must be an integer.")
+        if isinstance(value, Decimal):
+            if value != value.to_integral_value():
+                raise ValueError(f"{label} must be an integer.")
+            return int(value)
+        if isinstance(value, int):
+            return value
+
+        raise ValueError(f"{label} must be an integer.")
+
+    def _iso_date(self, value, label: str):
+        """Parse an ISO date from configuration."""
+        try:
+            return datetime.strptime(str(value), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(f"{label} must use YYYY-MM-DD format.") from exc
 
     def _load_scenarios(self, raw_scenarios) -> list[ScenarioDefinition]:
         """Parse optional scenario definitions from raw configuration data."""

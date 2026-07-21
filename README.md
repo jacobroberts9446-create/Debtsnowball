@@ -177,6 +177,54 @@ invalid extra payments, savings percentages outside `0` to `1`, non-list
 
 ---
 
+## Debt-Free Target Calculator
+
+The debt-free target calculator estimates the minimum extra payment per paycheck
+needed to become debt-free by a configured target date. The extra money is
+handled the same way as scenario extra payments: it goes directly to snowball
+funding after normal bills, debt minimums, and savings allocation.
+
+A target is considered successful when the projected debt-free date is on or
+before the configured `target_date`. A payoff exactly on the target date counts
+as success.
+
+Configuration lives in `config.json`:
+
+```json
+{
+  "debt_free_target": {
+    "enabled": true,
+    "target_date": "2027-12-31",
+    "maximum_extra_per_paycheck": "1000.00",
+    "precision": "0.01",
+    "maximum_iterations": 100
+  }
+}
+```
+
+Supported fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `enabled` | No | Set to `true` to run the calculator. Defaults to disabled when omitted. |
+| `target_date` | Yes, when enabled | ISO date in `YYYY-MM-DD` format. |
+| `maximum_extra_per_paycheck` | No | Largest extra payment to test. Defaults to `10000.00`. |
+| `precision` | No | Payment increment for the search. Defaults to `0.01`. |
+| `maximum_iterations` | No | Safety cap for forecast evaluations. Defaults to `100`. |
+
+If the baseline forecast already reaches the target, the required extra payment
+is `$0.00`. If there are no active debts, the calculator reports that no payoff
+funding is required. If the target cannot be reached within
+`maximum_extra_per_paycheck`, the result is marked unreachable and the maximum is
+not reported as a required payment.
+
+The calculator uses binary search over the configured precision instead of
+testing every cent one at a time. Its forecast horizon includes the target date
+and additional bounded time so a requested target is not marked unreachable just
+because the default forecast window was too short.
+
+---
+
 ## Example Output
 
 The Excel workbook includes:
@@ -190,6 +238,7 @@ The Excel workbook includes:
 | Savings Progress | Savings deposits, savings balance, goal, and remaining amount to goal. |
 | Forecast | Future payoff, savings, interest, and balance projections. |
 | Scenario Comparison | Baseline and configured scenario comparisons with deltas, payoff dates, and charts. |
+| Debt-Free Target | Minimum extra payment needed to reach a configured target date. |
 | Charts | Savings growth and debt reduction visualizations. |
 
 ---
@@ -235,6 +284,7 @@ DebtSnowball/
 | DebtEngine | Accrues interest, pays minimums, applies snowball payments, and tracks paid-off debts. |
 | ForecastEngine | Simulates future pay periods without mutating the live configuration. |
 | ScenarioEngine | Compares baseline forecasts against configured alternative scenarios. |
+| DebtFreeTargetCalculator | Finds the minimum extra snowball payment needed for a target debt-free date. |
 | ExcelWriter | Creates the Excel workbook, dashboard worksheet, data worksheets, and charts. |
 | Database | Provides SQLite persistence support for generated budget history. |
 
@@ -263,7 +313,7 @@ Current coverage: **97%**
 | Version | Status | Focus |
 | --- | --- | --- |
 | Version 1.0 ✅ | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
-| Version 2 🚧 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, and Configurable Scenarios in development. |
+| Version 2 🚧 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, Configurable Scenarios complete, and Debt-Free Target Calculator in development. |
 | Version 3 🔮 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
 
 ---

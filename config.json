@@ -69,5 +69,13 @@
     }
   ],
 
-  "scenarios": []
+  "scenarios": [],
+
+  "debt_free_target": {
+    "enabled": false,
+    "target_date": "2027-12-31",
+    "maximum_extra_per_paycheck": "1000.00",
+    "precision": "0.01",
+    "maximum_iterations": 100
+  }
 }

@@ -13,6 +13,7 @@ from app.config import Config
 from app.excel_writer import ExcelWriter
 from app.forecast_engine import ForecastEngine
 from app.scenario_engine import ScenarioEngine
+from app.target_calculator import DebtFreeTargetCalculator
 
 
 def main():
@@ -29,7 +30,13 @@ def main():
     summaries = budget.build_plan(periods)
     forecast = ForecastEngine(forecast_config).forecast()
     scenario_comparison = build_scenario_comparison(forecast_config)
-    workbook_path = ExcelWriter().write(summaries, forecast, scenario_comparison)
+    target_result = build_debt_free_target_result(forecast_config)
+    workbook_path = ExcelWriter().write(
+        summaries,
+        forecast,
+        scenario_comparison,
+        target_result,
+    )
 
     print()
 
@@ -70,6 +77,14 @@ def main():
 def build_scenario_comparison(config):
     """Build baseline plus configured scenario forecasts."""
     return ScenarioEngine(config, config.scenarios).compare()
+
+
+def build_debt_free_target_result(config):
+    """Build an optional debt-free target result from configuration."""
+    if not config.debt_free_target.enabled:
+        return None
+
+    return DebtFreeTargetCalculator(config, config.debt_free_target).calculate()
 
 
 if __name__ == "__main__":

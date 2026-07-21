@@ -216,8 +216,11 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     assert workbook["Dashboard"]["A12"].value == "Estimated Debt-Free Date"
     assert workbook["Dashboard"]["B14"].value == 25.0
     assert workbook["Dashboard"].freeze_panes == "A4"
-    assert workbook["Dashboard"]._charts[0].x_axis.number_format.formatCode == "mmm d"
-    assert workbook["Pay Period Summaries"].auto_filter.ref == "A1:K3"
+    assert workbook["Dashboard"]._charts[0].x_axis.number_format.formatCode == "@"
+    assert workbook["Dashboard"]._charts[0].x_axis.tickLblSkip == 1
+    assert workbook["Pay Period Summaries"].auto_filter.ref == "A1:L3"
+    assert workbook["Pay Period Summaries"]["L2"].value == "Jan 02"
+    assert workbook["Pay Period Summaries"].column_dimensions["L"].hidden is True
     assert workbook["Active Debts"].max_row == 4
     assert workbook["Paid-Off Debts"].max_row == 2
     assert workbook["Savings Progress"]["C3"].value == 1000
@@ -227,7 +230,10 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     assert workbook["Forecast"]["A19"].value == "Paycheck Date"
     assert workbook["Forecast"].auto_filter.ref == "A19:E21"
     assert len(workbook["Forecast"]._charts) == 2
-    assert workbook["Forecast"]._charts[0].x_axis.number_format.formatCode == "mmm d"
+    assert workbook["Forecast"]._charts[0].x_axis.number_format.formatCode == "@"
+    assert workbook["Forecast"]._charts[0].x_axis.tickLblSkip == 1
+    assert workbook["Forecast"]["F20"].value == "Jan 02"
+    assert workbook["Forecast"].column_dimensions["F"].hidden is True
     workbook.close()
 
 
@@ -243,6 +249,46 @@ def test_excel_writer_handles_empty_forecast(tmp_path):
     assert workbook["Forecast"]["A4"].value == "Estimated Debt-Free Date"
     assert len(workbook["Forecast"]._charts) == 0
     assert workbook["Dashboard"]["A1"].value == "DebtSnowball Dashboard"
+    workbook.close()
+
+
+def test_excel_writer_uses_sparse_labels_for_long_forecast_charts(tmp_path):
+    workbook_path = tmp_path / "long_forecast.xlsx"
+    periods = [
+        ForecastPeriod(
+            paycheck_date=date(2026 + index // 26, 1 + (index % 12), 1),
+            total_debt_balance=Decimal("1000.00") - Decimal(index),
+            savings_balance=Decimal(index),
+            interest_paid=Decimal("1.00"),
+            minimums_paid=Decimal("10.00"),
+            snowball_paid=Decimal("20.00"),
+        )
+        for index in range(40)
+    ]
+    forecast = ForecastSummary(
+        forecast_start_date=date(2026, 1, 1),
+        forecast_end_date=date(2027, 4, 1),
+        debt_free_date=None,
+        savings_goal_date=None,
+        starting_debt=Decimal("1000.00"),
+        total_interest_paid=Decimal("40.00"),
+        total_minimum_payments=Decimal("400.00"),
+        total_snowball_payments=Decimal("800.00"),
+        ending_savings=Decimal("40.00"),
+        remaining_debt=Decimal("960.00"),
+        completed=False,
+        periods=periods,
+    )
+
+    ExcelWriter(workbook_path).write([], forecast)
+
+    workbook = load_workbook(workbook_path)
+    chart_axis = workbook["Forecast"]._charts[0].x_axis
+    assert chart_axis.number_format.formatCode == "@"
+    assert chart_axis.tickLblSkip == 5
+    assert chart_axis.tickMarkSkip == 5
+    assert workbook["Forecast"]["F20"].value == "Jan 2026"
+    assert workbook["Forecast"].column_dimensions["F"].hidden is True
     workbook.close()
 
 

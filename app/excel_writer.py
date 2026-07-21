@@ -13,7 +13,13 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.budget_engine import PayPeriodSummary
-from app.models import ForecastSummary, ScenarioComparison, ScenarioResult
+from app.models import (
+    DebtFreeTargetResult,
+    DebtFreeTargetStatus,
+    ForecastSummary,
+    ScenarioComparison,
+    ScenarioResult,
+)
 
 
 class ExcelWriter:
@@ -27,6 +33,7 @@ class ExcelWriter:
         summaries: list[PayPeriodSummary],
         forecast: ForecastSummary | None = None,
         scenario_comparison: ScenarioComparison | None = None,
+        target_result: DebtFreeTargetResult | None = None,
     ) -> Path:
         """Write pay-period, debt, payoff, and savings worksheets."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +55,18 @@ class ExcelWriter:
             workbook.create_sheet("Scenario Comparison"),
             scenario_comparison,
         )
-        self._write_dashboard(dashboard_sheet, summaries, forecast, scenario_comparison)
+        if target_result is not None:
+            self._write_debt_free_target(
+                workbook.create_sheet("Debt-Free Target"),
+                target_result,
+            )
+        self._write_dashboard(
+            dashboard_sheet,
+            summaries,
+            forecast,
+            scenario_comparison,
+            target_result,
+        )
 
         workbook.save(self.path)
         return self.path
@@ -71,6 +89,7 @@ class ExcelWriter:
                 "Remaining Cash",
                 "Active Debt Total",
                 "Paid-Off Debt Count",
+                "Chart Label",
             ]
         )
 
@@ -89,6 +108,7 @@ class ExcelWriter:
                     summary.remaining_cash,
                     active_debt_total,
                     len(summary.paid_off_debts),
+                    self._chart_date_label(summary.pay_date, len(summaries)),
                 ]
             )
 
@@ -157,6 +177,7 @@ class ExcelWriter:
                 "Savings Balance",
                 "Savings Goal",
                 "Remaining To Goal",
+                "Chart Label",
             ]
         )
 
@@ -169,6 +190,7 @@ class ExcelWriter:
                     summary.savings_balance,
                     summary.savings_goal,
                     round(remaining_to_goal, 2),
+                    self._chart_date_label(summary.pay_date, len(summaries)),
                 ]
             )
 
@@ -180,6 +202,7 @@ class ExcelWriter:
         summaries: list[PayPeriodSummary],
         forecast: ForecastSummary | None = None,
         scenario_comparison: ScenarioComparison | None = None,
+        target_result: DebtFreeTargetResult | None = None,
     ) -> None:
         sheet["A1"] = "DebtSnowball Dashboard"
         sheet["A1"].font = Font(bold=True, size=16)
@@ -188,7 +211,12 @@ class ExcelWriter:
         sheet["A3"] = "Metric"
         sheet["B3"] = "Value"
 
-        metrics = self._dashboard_metrics(summaries, forecast, scenario_comparison)
+        metrics = self._dashboard_metrics(
+            summaries,
+            forecast,
+            scenario_comparison,
+            target_result,
+        )
         for index, (label, value, number_format) in enumerate(metrics, start=4):
             sheet.cell(row=index, column=1, value=label)
             value_cell = sheet.cell(row=index, column=2, value=value)
@@ -209,6 +237,7 @@ class ExcelWriter:
         summaries: list[PayPeriodSummary],
         forecast: ForecastSummary | None = None,
         scenario_comparison: ScenarioComparison | None = None,
+        target_result: DebtFreeTargetResult | None = None,
     ) -> list[tuple[str, object, str]]:
         if not summaries:
             metrics: list[tuple[str, object, str]] = []
@@ -264,7 +293,39 @@ class ExcelWriter:
             )
 
         metrics.extend(self._scenario_dashboard_metrics(scenario_comparison))
+        metrics.extend(self._target_dashboard_metrics(target_result))
         return metrics
+
+    def _target_dashboard_metrics(
+        self,
+        target_result: DebtFreeTargetResult | None,
+    ) -> list[tuple[str, object, str]]:
+        if target_result is None:
+            return []
+
+        required_payment = (
+            None
+            if target_result.required_extra_per_paycheck is None
+            else self._cell_value(target_result.required_extra_per_paycheck)
+        )
+        status = (
+            "Target not reachable"
+            if target_result.calculation_status == DebtFreeTargetStatus.UNREACHABLE
+            else "Target met"
+            if target_result.target_met
+            else "Not configured"
+        )
+
+        return [
+            ("Target Date", target_result.target_date, "mmm d, yyyy"),
+            ("Required Extra Per Paycheck", required_payment, "$#,##0.00"),
+            (
+                "Target Projected Debt-Free Date",
+                target_result.projected_debt_free_date,
+                "mmm d, yyyy",
+            ),
+            ("Target Status", status, "@"),
+        ]
 
     def _scenario_dashboard_metrics(
         self,
@@ -295,6 +356,85 @@ class ExcelWriter:
                 self._cell_value(best.extra_per_paycheck),
                 "$#,##0.00",
             ),
+        ]
+
+    def _write_debt_free_target(
+        self,
+        sheet: Worksheet,
+        result: DebtFreeTargetResult,
+    ) -> None:
+        """Write debt-free target calculator output."""
+        sheet["A1"] = "Debt-Free Target"
+        sheet["A1"].font = Font(bold=True, size=16)
+        sheet.merge_cells("A1:B1")
+
+        sheet["A3"] = "Metric"
+        sheet["B3"] = "Value"
+        rows = self._debt_free_target_rows(result)
+        for row_index, (label, value, number_format) in enumerate(rows, start=4):
+            sheet.cell(row=row_index, column=1, value=label)
+            value_cell = sheet.cell(row=row_index, column=2, value=value)
+            value_cell.number_format = number_format
+
+        self._format_table(sheet, currency_columns=[], date_columns=[], header_row=3)
+        sheet.auto_filter.ref = f"A3:B{len(rows) + 3}"
+        sheet.freeze_panes = "A4"
+        sheet.column_dimensions["A"].width = 34
+        sheet.column_dimensions["B"].width = 32
+
+    def _debt_free_target_rows(
+        self,
+        result: DebtFreeTargetResult,
+    ) -> list[tuple[str, object, str]]:
+        required_payment = (
+            None
+            if result.required_extra_per_paycheck is None
+            else self._cell_value(result.required_extra_per_paycheck)
+        )
+        interest_difference = (
+            result.baseline_total_interest - result.total_interest
+        )
+        days_accelerated = self._days_saved(
+            result.baseline_debt_free_date,
+            result.projected_debt_free_date,
+        )
+        status_message = result.message or result.calculation_status.value
+
+        return [
+            ("Target Date", result.target_date, "mmm d, yyyy"),
+            ("Required Extra Per Paycheck", required_payment, "$#,##0.00"),
+            (
+                "Projected Debt-Free Date",
+                result.projected_debt_free_date,
+                "mmm d, yyyy",
+            ),
+            ("Target Met", result.target_met, "@"),
+            ("Baseline Debt-Free Date", result.baseline_debt_free_date, "mmm d, yyyy"),
+            ("Days Accelerated", days_accelerated, "0"),
+            (
+                "Maximum Extra Tested",
+                self._cell_value(result.maximum_extra_tested),
+                "$#,##0.00",
+            ),
+            ("Search Precision", self._cell_value(result.precision), "$#,##0.00"),
+            ("Iterations Used", result.iterations_used, "0"),
+            (
+                "Total Interest at Required Payment",
+                self._cell_value(result.total_interest),
+                "$#,##0.00",
+            ),
+            (
+                "Interest Difference vs Baseline",
+                self._cell_value(interest_difference),
+                "$#,##0.00",
+            ),
+            (
+                "Total Snowball Paid",
+                self._cell_value(result.total_snowball_paid),
+                "$#,##0.00",
+            ),
+            ("Ending Debt", self._cell_value(result.ending_debt), "$#,##0.00"),
+            ("Status Message", status_message, "@"),
         ]
 
     def _write_scenario_comparison(
@@ -798,6 +938,7 @@ class ExcelWriter:
             "Savings Balance",
             "Interest Paid",
             "Snowball Paid",
+            "Chart Label",
         ]
         for column_index, header in enumerate(timeline_headers, start=1):
             sheet.cell(row=timeline_table_header_row, column=column_index, value=header)
@@ -812,6 +953,11 @@ class ExcelWriter:
             sheet.cell(row=row_index, column=3, value=self._cell_value(period.savings_balance))
             sheet.cell(row=row_index, column=4, value=self._cell_value(period.interest_paid))
             sheet.cell(row=row_index, column=5, value=self._cell_value(period.snowball_paid))
+            sheet.cell(
+                row=row_index,
+                column=6,
+                value=self._chart_date_label(period.paycheck_date, len(timeline_rows)),
+            )
 
         self._format_forecast_sheet(
             sheet=sheet,
@@ -909,7 +1055,7 @@ class ExcelWriter:
         max_row = timeline_table_header_row + timeline_count
         categories = Reference(
             sheet,
-            min_col=1,
+            min_col=6,
             min_row=timeline_table_header_row + 1,
             max_row=max_row,
         )
@@ -926,7 +1072,7 @@ class ExcelWriter:
         )
         debt_chart.add_data(debt_data, titles_from_data=True)
         debt_chart.set_categories(categories)
-        self._format_date_chart_axis(debt_chart)
+        self._format_date_chart_axis(debt_chart, timeline_count)
         debt_chart.height = 7
         debt_chart.width = 14
         sheet.add_chart(debt_chart, "G3")
@@ -943,10 +1089,11 @@ class ExcelWriter:
         )
         savings_chart.add_data(savings_data, titles_from_data=True)
         savings_chart.set_categories(categories)
-        self._format_date_chart_axis(savings_chart)
+        self._format_date_chart_axis(savings_chart, timeline_count)
         savings_chart.height = 7
         savings_chart.width = 14
         sheet.add_chart(savings_chart, "G20")
+        sheet.column_dimensions["F"].hidden = True
 
     def _add_savings_chart(self, sheet: Worksheet, summary_count: int) -> None:
         if summary_count == 0:
@@ -966,17 +1113,18 @@ class ExcelWriter:
         )
         categories = Reference(
             sheet.parent["Savings Progress"],
-            min_col=1,
+            min_col=6,
             min_row=2,
             max_row=summary_count + 1,
         )
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(categories)
-        self._format_date_chart_axis(chart)
+        self._format_date_chart_axis(chart, summary_count)
         chart.height = 7
         chart.width = 14
 
         sheet.add_chart(chart, "D3")
+        sheet.parent["Savings Progress"].column_dimensions["F"].hidden = True
 
     def _add_debt_chart(self, sheet: Worksheet, summary_count: int) -> None:
         if summary_count == 0:
@@ -996,23 +1144,30 @@ class ExcelWriter:
         )
         categories = Reference(
             sheet.parent["Pay Period Summaries"],
-            min_col=1,
+            min_col=12,
             min_row=2,
             max_row=summary_count + 1,
         )
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(categories)
-        self._format_date_chart_axis(chart)
+        self._format_date_chart_axis(chart, summary_count)
         chart.height = 7
         chart.width = 14
 
         sheet.add_chart(chart, "D20")
+        sheet.parent["Pay Period Summaries"].column_dimensions["L"].hidden = True
 
-    def _format_date_chart_axis(self, chart: LineChart) -> None:
+    def _format_date_chart_axis(self, chart: LineChart, point_count: int) -> None:
         """Format date-based chart categories with readable labels."""
-        chart.x_axis.number_format = "mmm d"
+        chart.x_axis.number_format = "@"
         chart.x_axis.majorTickMark = "out"
         chart.x_axis.tickLblPos = "low"
+        chart.x_axis.tickLblSkip = max(1, (point_count + 7) // 8)
+        chart.x_axis.tickMarkSkip = max(1, (point_count + 7) // 8)
+
+    def _chart_date_label(self, value, point_count: int) -> str:
+        """Return a text date label for chart categories."""
+        return value.strftime("%b %Y" if point_count > 24 else "%b %d")
 
     def _format_table(
         self,

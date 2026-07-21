@@ -7,6 +7,7 @@ Core data models used throughout DebtSnowball.
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from enum import StrEnum
 from typing import List
 
 
@@ -306,3 +307,58 @@ class ScenarioDelta:
     additional_snowball_paid: Decimal
     ending_debt_difference: Decimal
     ending_savings_difference: Decimal
+
+
+class DebtFreeTargetStatus(StrEnum):
+    """Status values returned by the debt-free target calculator."""
+
+    NOT_CONFIGURED = "not_configured"
+    NO_DEBT = "no_debt"
+    ALREADY_ON_TRACK = "already_on_track"
+    TARGET_MET = "target_met"
+    UNREACHABLE = "unreachable"
+
+
+@dataclass
+class DebtFreeTargetRequest:
+    """Configuration for a debt-free target calculation."""
+
+    enabled: bool = False
+    target_date: date | None = None
+    maximum_extra_per_paycheck: Decimal = Decimal("10000.00")
+    precision: Decimal = Decimal("0.01")
+    maximum_iterations: int = 100
+
+
+@dataclass
+class DebtFreeTargetIteration:
+    """One trial forecast evaluated by the target calculator."""
+
+    extra_per_paycheck: Decimal
+    projected_debt_free_date: date | None
+    target_met: bool
+
+
+@dataclass
+class DebtFreeTargetResult:
+    """Result of finding the minimum extra payment for a target date."""
+
+    target_date: date
+    required_extra_per_paycheck: Decimal | None
+    projected_debt_free_date: date | None
+    target_met: bool
+    total_interest: Decimal
+    total_snowball_paid: Decimal
+    ending_debt: Decimal
+    iterations_used: int
+    lower_bound_tested: Decimal
+    upper_bound_tested: Decimal
+    maximum_extra_tested: Decimal
+    precision: Decimal
+    calculation_status: DebtFreeTargetStatus
+    message: str | None = None
+    baseline_debt_free_date: date | None = None
+    baseline_total_interest: Decimal = Decimal("0.00")
+    baseline_total_snowball_paid: Decimal = Decimal("0.00")
+    baseline_ending_debt: Decimal = Decimal("0.00")
+    iterations: list[DebtFreeTargetIteration] = field(default_factory=list)
