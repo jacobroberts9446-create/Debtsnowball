@@ -100,6 +100,44 @@ class ForecastEngine:
                     interest_paid=interest_paid,
                     minimums_paid=minimums_paid,
                     snowball_paid=snowball_paid,
+                    active_savings_goal_name=summary.active_savings_goal_name,
+                    active_savings_target=self._optional_money(
+                        summary.active_savings_target
+                    ),
+                    savings_balance_before_withdrawal=self._optional_money(
+                        summary.savings_balance_before_withdrawal
+                    ),
+                    planned_withdrawal_amount=self._money(
+                        summary.planned_withdrawal_amount
+                    ),
+                    savings_balance_after_withdrawal=self._optional_money(
+                        summary.savings_balance_after_withdrawal
+                    ),
+                    savings_contribution=self._money(summary.savings_contribution),
+                    ending_savings_balance=savings_balance,
+                    goal_progress_percentage=self._optional_decimal(
+                        summary.goal_progress_percentage
+                    ),
+                    savings_stage_changed=summary.savings_stage_changed,
+                    available_after_required_payments=self._money(
+                        summary.available_after_required_payments
+                    ),
+                    normal_savings_contribution=self._money(
+                        summary.normal_savings_contribution
+                    ),
+                    deadline_required_savings_contribution=self._money(
+                        summary.deadline_required_savings_contribution
+                    ),
+                    snowball_before_savings_adjustment=self._money(
+                        summary.snowball_before_savings_adjustment
+                    ),
+                    snowball_reduction=self._money(summary.snowball_reduction),
+                    personal_expense_reduction=self._money(
+                        summary.personal_expense_reduction
+                    ),
+                    projected_savings_shortfall=self._money(
+                        summary.projected_savings_shortfall
+                    ),
                 )
             )
 
@@ -135,6 +173,8 @@ class ForecastEngine:
             debt_payoffs=debt_payoffs,
             periods=periods,
             debt_engine=budget_engine.debt_engine,
+            savings_stage_results=budget_engine.savings_stage_results(),
+            planned_withdrawal_results=budget_engine.planned_withdrawal_results(),
         )
 
     def _summary(
@@ -151,6 +191,8 @@ class ForecastEngine:
         debt_payoffs: dict[str, DebtPayoffForecast],
         periods: list[ForecastPeriod],
         debt_engine: object | None,
+        savings_stage_results=None,
+        planned_withdrawal_results=None,
     ) -> ForecastSummary:
         total_interest = self._total_interest_paid(debt_engine)
         completed = debt_free_date is not None and savings_goal_date is not None
@@ -172,6 +214,8 @@ class ForecastEngine:
             completed=completed,
             debt_payoffs=list(debt_payoffs.values()),
             periods=periods,
+            savings_stage_results=savings_stage_results or [],
+            planned_withdrawal_results=planned_withdrawal_results or [],
         )
 
     def _record_payoffs(
@@ -244,6 +288,18 @@ class ForecastEngine:
 
     def _money(self, value) -> Decimal:
         return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
+
+    def _optional_money(self, value) -> Decimal | None:
+        if value is None:
+            return None
+
+        return self._money(value)
+
+    def _optional_decimal(self, value) -> Decimal | None:
+        if value is None:
+            return None
+
+        return Decimal(str(value))
 
     def _add_years(self, value: date, years: int) -> date:
         try:

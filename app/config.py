@@ -14,6 +14,10 @@ from app.models import (
     BudgetSettings,
     Debt,
     DebtFreeTargetRequest,
+    PlannedSavingsWithdrawal,
+    SavingsFundingMode,
+    SavingsGoalStage,
+    SavingsPlan,
     ScenarioDefinition,
 )
 
@@ -28,6 +32,7 @@ class Config:
         self.debts = []
         self.scenarios: list[ScenarioDefinition] = []
         self.debt_free_target = DebtFreeTargetRequest(enabled=False)
+        self.savings_plan: SavingsPlan | None = None
 
     def load(self: Self, filename: str | Path = "config.json") -> Self:
         """Load budget settings, bills, and debts from a JSON file."""
@@ -70,8 +75,173 @@ class Config:
         self.debt_free_target = self._load_debt_free_target(
             data.get("debt_free_target")
         )
+        self.savings_plan = self._load_savings_plan(data.get("savings_plan"))
 
         return self
+
+    def _load_savings_plan(self, raw_plan) -> SavingsPlan | None:
+        """Parse optional dated savings goal and withdrawal configuration."""
+        if raw_plan is None:
+            return None
+        if not isinstance(raw_plan, dict):
+            raise ValueError("savings_plan must be an object.")
+
+        raw_goals = raw_plan.get("goals", [])
+        raw_withdrawals = raw_plan.get("withdrawals", [])
+        if not isinstance(raw_goals, list):
+            raise ValueError("savings_plan goals must be a list.")
+        if not isinstance(raw_withdrawals, list):
+            raise ValueError("savings_plan withdrawals must be a list.")
+
+        goals = self._load_savings_goals(raw_goals)
+        withdrawals = self._load_savings_withdrawals(raw_withdrawals)
+        self._validate_savings_plan_order(goals)
+        return SavingsPlan(goals=goals, withdrawals=withdrawals)
+
+    def _load_savings_goals(self, raw_goals: list) -> list[SavingsGoalStage]:
+        goals = []
+        names = set()
+        for index, raw_goal in enumerate(raw_goals, start=1):
+            if not isinstance(raw_goal, dict):
+                raise ValueError(f"savings goal {index} must be an object.")
+            name = str(raw_goal.get("name", "")).strip()
+            if not name:
+                raise ValueError(f"savings goal {index} name is required.")
+            normalized_name = name.casefold()
+            if normalized_name in names:
+                raise ValueError("savings goal names must be unique.")
+            names.add(normalized_name)
+
+            target_amount = self._decimal_config_value(
+                raw_goal.get("target_amount"),
+                f"savings goal {index} target_amount",
+            )
+            if target_amount < Decimal("0.00"):
+                raise ValueError("savings goal target_amount cannot be negative.")
+            start_date = self._iso_date(
+                raw_goal.get("start_date"),
+                f"savings goal {index} start_date",
+            )
+            target_date = None
+            if raw_goal.get("target_date") is not None:
+                target_date = self._iso_date(
+                    raw_goal["target_date"],
+                    f"savings goal {index} target_date",
+                )
+                if target_date < start_date:
+                    raise ValueError("savings goal target_date cannot be before start_date.")
+
+            starting_balance = self._optional_decimal_config_value(
+                raw_goal.get("starting_balance"),
+                f"savings goal {index} starting_balance",
+            )
+            savings_percentage = self._optional_decimal_config_value(
+                raw_goal.get("savings_percentage"),
+                f"savings goal {index} savings_percentage",
+            )
+            if savings_percentage is not None and not (
+                Decimal("0") <= savings_percentage <= Decimal("1")
+            ):
+                raise ValueError("savings goal savings_percentage must be between 0 and 1.")
+            funding_mode = self._savings_funding_mode(
+                raw_goal.get("funding_mode", SavingsFundingMode.PERCENTAGE.value),
+                index,
+            )
+            if (
+                funding_mode == SavingsFundingMode.DEADLINE_PRIORITY
+                and target_date is None
+            ):
+                raise ValueError("deadline_priority savings goals require a target_date.")
+
+            goals.append(
+                SavingsGoalStage(
+                    name=name,
+                    target_amount=target_amount,
+                    start_date=start_date,
+                    target_date=target_date,
+                    starting_balance_override=starting_balance,
+                    savings_percentage_override=savings_percentage,
+                    funding_mode=funding_mode,
+                )
+            )
+
+        return goals
+
+    def _savings_funding_mode(self, value, index: int) -> SavingsFundingMode:
+        """Parse and validate a savings-goal funding mode."""
+        try:
+            return SavingsFundingMode(str(value))
+        except ValueError as exc:
+            supported = ", ".join(mode.value for mode in SavingsFundingMode)
+            raise ValueError(
+                f"savings goal {index} funding_mode must be one of: {supported}."
+            ) from exc
+
+    def _load_savings_withdrawals(
+        self,
+        raw_withdrawals: list,
+    ) -> list[PlannedSavingsWithdrawal]:
+        withdrawals = []
+        for index, raw_withdrawal in enumerate(raw_withdrawals, start=1):
+            if not isinstance(raw_withdrawal, dict):
+                raise ValueError(f"savings withdrawal {index} must be an object.")
+            name = str(raw_withdrawal.get("name", "")).strip()
+            if not name:
+                raise ValueError(f"savings withdrawal {index} name is required.")
+            withdrawal_date = self._iso_date(
+                raw_withdrawal.get("date"),
+                f"savings withdrawal {index} date",
+            )
+            if withdrawal_date < self.settings.first_paycheck:
+                raise ValueError("savings withdrawal date cannot be before forecast start.")
+
+            has_amount = "amount" in raw_withdrawal and raw_withdrawal["amount"] is not None
+            drain_balance = raw_withdrawal.get("drain_balance", False)
+            if not isinstance(drain_balance, bool):
+                raise ValueError("savings withdrawal drain_balance must be boolean.")
+            if has_amount == drain_balance:
+                raise ValueError(
+                    "savings withdrawal must configure exactly one of amount or drain_balance."
+                )
+
+            amount = None
+            if has_amount:
+                amount = self._decimal_config_value(
+                    raw_withdrawal["amount"],
+                    f"savings withdrawal {index} amount",
+                )
+                if amount < Decimal("0.00"):
+                    raise ValueError("savings withdrawal amount cannot be negative.")
+
+            withdrawals.append(
+                PlannedSavingsWithdrawal(
+                    name=name,
+                    withdrawal_date=withdrawal_date,
+                    amount=amount,
+                    drain_balance=drain_balance,
+                )
+            )
+
+        return sorted(withdrawals, key=lambda withdrawal: withdrawal.withdrawal_date)
+
+    def _validate_savings_plan_order(self, goals: list[SavingsGoalStage]) -> None:
+        previous = None
+        seen_starts = set()
+        for goal in goals:
+            if goal.start_date in seen_starts:
+                raise ValueError("savings goal duplicate start dates are not supported.")
+            seen_starts.add(goal.start_date)
+            if previous is not None:
+                if goal.start_date <= previous.start_date:
+                    raise ValueError("savings goals must be in chronological order.")
+                if (
+                    previous.target_date is not None
+                    and goal.start_date <= previous.target_date
+                ):
+                    raise ValueError(
+                        "a savings goal cannot start before the prior goal is evaluated."
+                    )
+            previous = goal
 
     def _load_debt_free_target(self, raw_target) -> DebtFreeTargetRequest:
         """Parse optional debt-free target calculator configuration."""

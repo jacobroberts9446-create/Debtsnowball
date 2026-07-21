@@ -217,6 +217,22 @@ class ForecastPeriod:
     interest_paid: Decimal
     minimums_paid: Decimal
     snowball_paid: Decimal
+    active_savings_goal_name: str | None = None
+    active_savings_target: Decimal | None = None
+    savings_balance_before_withdrawal: Decimal | None = None
+    planned_withdrawal_amount: Decimal = Decimal("0.00")
+    savings_balance_after_withdrawal: Decimal | None = None
+    savings_contribution: Decimal = Decimal("0.00")
+    ending_savings_balance: Decimal | None = None
+    goal_progress_percentage: Decimal | None = None
+    savings_stage_changed: bool = False
+    available_after_required_payments: Decimal = Decimal("0.00")
+    normal_savings_contribution: Decimal = Decimal("0.00")
+    deadline_required_savings_contribution: Decimal = Decimal("0.00")
+    snowball_before_savings_adjustment: Decimal = Decimal("0.00")
+    snowball_reduction: Decimal = Decimal("0.00")
+    personal_expense_reduction: Decimal = Decimal("0.00")
+    projected_savings_shortfall: Decimal = Decimal("0.00")
 
 
 @dataclass
@@ -236,6 +252,10 @@ class ForecastSummary:
     completed: bool
     debt_payoffs: list[DebtPayoffForecast] = field(default_factory=list)
     periods: list[ForecastPeriod] = field(default_factory=list)
+    savings_stage_results: list["SavingsStageResult"] = field(default_factory=list)
+    planned_withdrawal_results: list["PlannedWithdrawalResult"] = field(
+        default_factory=list
+    )
 
 
 @dataclass
@@ -307,6 +327,96 @@ class ScenarioDelta:
     additional_snowball_paid: Decimal
     ending_debt_difference: Decimal
     ending_savings_difference: Decimal
+
+
+class SavingsGoalStatus(StrEnum):
+    """Lifecycle status for a savings goal stage."""
+
+    UPCOMING = "upcoming"
+    ACTIVE = "active"
+    ACHIEVED_EARLY = "achieved_early"
+    ACHIEVED_ON_TIME = "achieved_on_time"
+    ACHIEVED_LATE = "achieved_late"
+    NOT_ACHIEVED = "not_achieved"
+
+
+class SavingsFundingMode(StrEnum):
+    """How an active savings goal receives paycheck surplus."""
+
+    PERCENTAGE = "percentage"
+    DEADLINE_PRIORITY = "deadline_priority"
+    PRIORITY_UNTIL_FUNDED = "priority_until_funded"
+
+
+@dataclass
+class SavingsGoalStage:
+    """A dated savings target in a multi-stage savings plan."""
+
+    name: str
+    target_amount: Decimal
+    start_date: date
+    target_date: date | None = None
+    starting_balance_override: Decimal | None = None
+    savings_percentage_override: Decimal | None = None
+    funding_mode: SavingsFundingMode = SavingsFundingMode.PERCENTAGE
+
+
+@dataclass
+class PlannedSavingsWithdrawal:
+    """A configured savings withdrawal event."""
+
+    name: str
+    withdrawal_date: date
+    amount: Decimal | None = None
+    drain_balance: bool = False
+
+
+@dataclass
+class SavingsPlan:
+    """Ordered savings goals and planned withdrawals."""
+
+    goals: list[SavingsGoalStage] = field(default_factory=list)
+    withdrawals: list[PlannedSavingsWithdrawal] = field(default_factory=list)
+
+
+@dataclass
+class SavingsStageResult:
+    """Progress and deadline result for a savings goal stage."""
+
+    goal_name: str
+    start_date: date
+    target_date: date | None
+    target_amount: Decimal
+    starting_balance: Decimal
+    amount_needed: Decimal = Decimal("0.00")
+    eligible_paychecks_remaining: int = 0
+    projected_available_contributions: Decimal = Decimal("0.00")
+    projected_balance_at_deadline: Decimal | None = None
+    projected_shortfall: Decimal | None = None
+    additional_funding_needed: Decimal = Decimal("0.00")
+    feasible_under_current_plan: bool | None = None
+    achieved_date: date | None = None
+    amount_at_deadline: Decimal | None = None
+    shortfall_at_deadline: Decimal | None = None
+    ending_balance: Decimal = Decimal("0.00")
+    status: SavingsGoalStatus = SavingsGoalStatus.UPCOMING
+    days_early_or_late: int | None = None
+
+
+@dataclass
+class PlannedWithdrawalResult:
+    """Application result for a planned savings withdrawal."""
+
+    name: str
+    scheduled_date: date
+    requested_amount: Decimal | None
+    drain_balance: bool
+    actual_amount_withdrawn: Decimal
+    balance_before: Decimal
+    balance_after: Decimal
+    applied_date: date | None
+    shortfall: Decimal = Decimal("0.00")
+    status: str = "pending"
 
 
 class DebtFreeTargetStatus(StrEnum):

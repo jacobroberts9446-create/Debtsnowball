@@ -57,6 +57,26 @@ def main():
         print(f"  Income:          ${summary.income:,.2f}")
         print(f"  Bills:           ${summary.bills_paid:,.2f}")
         print(f"  Debt Minimums:   ${summary.debt_minimums:,.2f}")
+        if summary.active_savings_goal_name:
+            print(f"  Savings Goal:    {summary.active_savings_goal_name}")
+            print(
+                "  Available After Required Payments: "
+                f"${summary.available_after_required_payments:,.2f}"
+            )
+            print(
+                "  Snowball Redirected To Savings: "
+                f"${summary.snowball_reduction:,.2f}"
+            )
+            if summary.personal_expense_reduction > 0:
+                print(
+                    "  Personal Expense Reduction: "
+                    f"${summary.personal_expense_reduction:,.2f}"
+                )
+            if summary.projected_savings_shortfall > 0:
+                print(
+                    "  Projected Savings Shortfall: "
+                    f"${summary.projected_savings_shortfall:,.2f}"
+                )
         print(f"  Savings Deposit: ${summary.savings_contribution:,.2f}")
         print(f"  Snowball Payment: ${summary.snowball_payment:,.2f}")
         print(f"  Remaining Cash:  ${summary.remaining_cash:,.2f}")

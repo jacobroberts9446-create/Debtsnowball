@@ -48,7 +48,9 @@ class ExcelWriter:
         self._write_active_debts(workbook.create_sheet("Active Debts"), summaries)
         self._write_paid_off_debts(workbook.create_sheet("Paid-Off Debts"), summaries)
         self._write_savings_progress(
-            workbook.create_sheet("Savings Progress"), summaries
+            workbook.create_sheet("Savings Progress"),
+            summaries,
+            forecast,
         )
         self._write_forecast(workbook.create_sheet("Forecast"), forecast)
         self._write_scenario_comparison(
@@ -84,8 +86,16 @@ class ExcelWriter:
                 "Income",
                 "Bills Paid",
                 "Debt Minimums",
+                "Savings Goal",
+                "Available After Required Payments",
+                "Normal Savings",
+                "Required Savings",
                 "Savings Deposit",
+                "Snowball Before Adjustment",
+                "Snowball Redirected To Savings",
+                "Personal Expense Reduction",
                 "Snowball Payment",
+                "Savings Shortfall",
                 "Remaining Cash",
                 "Active Debt Total",
                 "Paid-Off Debt Count",
@@ -103,8 +113,16 @@ class ExcelWriter:
                     summary.income,
                     summary.bills_paid,
                     summary.debt_minimums,
+                    summary.active_savings_goal_name,
+                    summary.available_after_required_payments,
+                    summary.normal_savings_contribution,
+                    summary.deadline_required_savings_contribution,
                     summary.savings_contribution,
+                    summary.snowball_before_savings_adjustment,
+                    summary.snowball_reduction,
+                    summary.personal_expense_reduction,
                     summary.snowball_payment,
+                    summary.projected_savings_shortfall,
                     summary.remaining_cash,
                     active_debt_total,
                     len(summary.paid_off_debts),
@@ -114,7 +132,7 @@ class ExcelWriter:
 
         self._format_table(
             sheet,
-            currency_columns=[4, 5, 6, 7, 8, 9, 10],
+            currency_columns=[4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
             date_columns=[1, 2, 3],
         )
 
@@ -169,7 +187,14 @@ class ExcelWriter:
         self,
         sheet: Worksheet,
         summaries: list[PayPeriodSummary],
+        forecast: ForecastSummary | None = None,
     ) -> None:
+        if forecast is not None and (
+            forecast.savings_stage_results or forecast.planned_withdrawal_results
+        ):
+            self._write_savings_plan_sections(sheet, forecast, summaries)
+            return
+
         sheet.append(
             [
                 "Pay Date",
@@ -195,6 +220,211 @@ class ExcelWriter:
             )
 
         self._format_table(sheet, currency_columns=[2, 3, 4, 5], date_columns=[1])
+
+    def _write_savings_plan_sections(
+        self,
+        sheet: Worksheet,
+        forecast: ForecastSummary,
+        summaries: list[PayPeriodSummary],
+    ) -> None:
+        sheet["A1"] = "Savings Plan Summary"
+        sheet["A1"].font = Font(bold=True, size=16)
+        summary_headers = [
+            "Goal Name",
+            "Start Date",
+            "Target Date",
+            "Target Amount",
+            "Starting Balance",
+            "Amount Needed",
+            "Eligible Paychecks Remaining",
+            "Projected Available Contributions",
+            "Projected Balance At Deadline",
+            "Projected Shortfall",
+            "Additional Funding Needed",
+            "Feasible",
+            "Achieved Date",
+            "Amount at Deadline",
+            "Shortfall at Deadline",
+            "Current/Ending Balance",
+            "Status",
+            "Days Early/Late",
+        ]
+        self._write_header(sheet, 3, summary_headers)
+        for row_index, stage in enumerate(forecast.savings_stage_results, start=4):
+            sheet.append(
+                [
+                    stage.goal_name,
+                    stage.start_date,
+                    stage.target_date,
+                    self._cell_value(stage.target_amount),
+                    self._cell_value(stage.starting_balance),
+                    self._cell_value(stage.amount_needed),
+                    stage.eligible_paychecks_remaining,
+                    self._cell_value(stage.projected_available_contributions),
+                    self._cell_value(stage.projected_balance_at_deadline),
+                    self._cell_value(stage.projected_shortfall),
+                    self._cell_value(stage.additional_funding_needed),
+                    self._yes_no(stage.feasible_under_current_plan),
+                    stage.achieved_date,
+                    self._cell_value(stage.amount_at_deadline),
+                    self._cell_value(stage.shortfall_at_deadline),
+                    self._cell_value(stage.ending_balance),
+                    stage.status.value,
+                    stage.days_early_or_late,
+                ]
+            )
+
+        withdrawals_title_row = 5 + len(forecast.savings_stage_results)
+        sheet.cell(row=withdrawals_title_row, column=1, value="Planned Withdrawals")
+        sheet.cell(row=withdrawals_title_row, column=1).font = Font(bold=True)
+        withdrawal_header_row = withdrawals_title_row + 1
+        withdrawal_headers = [
+            "Name",
+            "Scheduled Date",
+            "Requested Amount",
+            "Drain Balance",
+            "Actual Amount Withdrawn",
+            "Balance Before",
+            "Balance After",
+            "Applied Date",
+            "Status",
+        ]
+        self._write_header(sheet, withdrawal_header_row, withdrawal_headers)
+        for row_index, withdrawal in enumerate(
+            forecast.planned_withdrawal_results,
+            start=withdrawal_header_row + 1,
+        ):
+            sheet.append(
+                [
+                    withdrawal.name,
+                    withdrawal.scheduled_date,
+                    self._cell_value(withdrawal.requested_amount),
+                    withdrawal.drain_balance,
+                    self._cell_value(withdrawal.actual_amount_withdrawn),
+                    self._cell_value(withdrawal.balance_before),
+                    self._cell_value(withdrawal.balance_after),
+                    withdrawal.applied_date,
+                    withdrawal.status,
+                ]
+            )
+
+        detail_title_row = withdrawal_header_row + max(
+            len(forecast.planned_withdrawal_results),
+            1,
+        ) + 3
+        sheet.cell(row=detail_title_row, column=1, value="Savings Progress Detail")
+        sheet.cell(row=detail_title_row, column=1).font = Font(bold=True)
+        detail_header_row = detail_title_row + 1
+        detail_headers = [
+            "Pay Date",
+            "Active Goal",
+            "Available After Required Payments",
+            "Normal Savings",
+            "Required Savings",
+            "Savings Contribution",
+            "Snowball Before Adjustment",
+            "Snowball Redirected To Savings",
+            "Personal Expense Reduction",
+            "Actual Snowball Payment",
+            "Projected Savings Shortfall",
+            "Withdrawal",
+            "Ending Savings Balance",
+            "Active Target",
+            "Progress",
+            "Chart Label",
+        ]
+        self._write_header(sheet, detail_header_row, detail_headers)
+        for row_index, summary in enumerate(summaries, start=detail_header_row + 1):
+            sheet.append(
+                [
+                    summary.pay_date,
+                    summary.active_savings_goal_name,
+                    summary.available_after_required_payments,
+                    summary.normal_savings_contribution,
+                    summary.deadline_required_savings_contribution,
+                    summary.savings_contribution,
+                    summary.snowball_before_savings_adjustment,
+                    summary.snowball_reduction,
+                    summary.personal_expense_reduction,
+                    summary.snowball_payment,
+                    summary.projected_savings_shortfall,
+                    summary.planned_withdrawal_amount,
+                    summary.savings_balance,
+                    summary.active_savings_target,
+                    summary.goal_progress_percentage,
+                    self._chart_date_label(summary.pay_date, len(summaries)),
+                ]
+            )
+
+        self._format_savings_plan_sheet(
+            sheet,
+            detail_header_row=detail_header_row,
+        )
+
+    def _format_savings_plan_sheet(
+        self,
+        sheet: Worksheet,
+        detail_header_row: int,
+    ) -> None:
+        non_currency_headers = {
+            "Goal Name",
+            "Start Date",
+            "Target Date",
+            "Eligible Paychecks Remaining",
+            "Feasible",
+            "Achieved Date",
+            "Status",
+            "Days Early/Late",
+            "Name",
+            "Scheduled Date",
+            "Drain Balance",
+            "Applied Date",
+            "Pay Date",
+            "Active Goal",
+            "Progress",
+            "Chart Label",
+        }
+        for row in sheet.iter_rows():
+            header = self._section_header_for_cell(sheet, row[0].row)
+            for cell in row:
+                if hasattr(cell.value, "year"):
+                    cell.number_format = "mmm d, yyyy"
+                elif (
+                    isinstance(cell.value, (int, float))
+                    and not isinstance(cell.value, bool)
+                    and header.get(cell.column) not in non_currency_headers
+                ):
+                    cell.number_format = "$#,##0.00"
+
+        progress_col = self._header_column(sheet, "Progress", detail_header_row)
+        for cell in sheet[get_column_letter(progress_col)][detail_header_row:]:
+            cell.number_format = "0.0%"
+
+        label_col = self._header_column(sheet, "Chart Label", detail_header_row)
+        sheet.column_dimensions[get_column_letter(label_col)].hidden = True
+        for column_index, column in enumerate(sheet.columns, start=1):
+            max_length = max(
+                len(str(cell.value)) if cell.value is not None else 0 for cell in column
+            )
+            sheet.column_dimensions[get_column_letter(column_index)].width = min(
+                max(max_length + 2, 12),
+                32,
+            )
+        sheet.freeze_panes = f"A{detail_header_row + 1}"
+        sheet.auto_filter.ref = f"A{detail_header_row}:{get_column_letter(sheet.max_column)}{sheet.max_row}"
+
+    def _section_header_for_cell(self, sheet: Worksheet, row_index: int) -> dict[int, str]:
+        """Return the nearest header row mapping above a cell row."""
+        header_map: dict[int, str] = {}
+        for row in range(row_index, 0, -1):
+            values = [cell.value for cell in sheet[row]]
+            if "Goal Name" in values or "Pay Date" in values or "Scheduled Date" in values:
+                return {
+                    cell.column: str(cell.value)
+                    for cell in sheet[row]
+                    if cell.value is not None
+                }
+        return header_map
 
     def _write_dashboard(
         self,
@@ -270,6 +500,63 @@ class ExcelWriter:
                 ("Total Snowball Paid", total_snowball, "$#,##0.00"),
                 ("Total Minimums Paid", total_minimums, "$#,##0.00"),
             ]
+            if last_summary.active_savings_goal_name is not None:
+                active_stage_result = self._active_savings_stage_result(
+                    forecast,
+                    last_summary.active_savings_goal_name,
+                )
+                metrics.extend(
+                    [
+                        ("Active Savings Goal", last_summary.active_savings_goal_name, "@"),
+                        (
+                            "Active Savings Target",
+                            last_summary.active_savings_target,
+                            "$#,##0.00",
+                        ),
+                        (
+                            "Active Savings Target Date",
+                            last_summary.savings_goal_target_date,
+                            "mmm d, yyyy",
+                        ),
+                        (
+                            "Current Savings Progress",
+                            last_summary.goal_progress_percentage,
+                            "0.0%",
+                        ),
+                        (
+                            "Projected Balance At Deadline",
+                            self._cell_value(
+                                active_stage_result.projected_balance_at_deadline
+                                if active_stage_result is not None
+                                else None
+                            ),
+                            "$#,##0.00",
+                        ),
+                        (
+                            "Projected Shortfall",
+                            self._cell_value(
+                                active_stage_result.projected_shortfall
+                                if active_stage_result is not None
+                                else None
+                            ),
+                            "$#,##0.00",
+                        ),
+                        (
+                            "Goal Feasible",
+                            self._yes_no(
+                                active_stage_result.feasible_under_current_plan
+                                if active_stage_result is not None
+                                else None
+                            ),
+                            "@",
+                        ),
+                        (
+                            "Snowball Currently Reduced",
+                            "Yes" if last_summary.snowball_reduction > 0 else "No",
+                            "@",
+                        ),
+                    ]
+                )
 
         if forecast is not None:
             metrics.extend(
@@ -295,6 +582,23 @@ class ExcelWriter:
         metrics.extend(self._scenario_dashboard_metrics(scenario_comparison))
         metrics.extend(self._target_dashboard_metrics(target_result))
         return metrics
+
+    def _active_savings_stage_result(
+        self,
+        forecast: ForecastSummary | None,
+        goal_name: str,
+    ):
+        if forecast is None:
+            return None
+
+        return next(
+            (
+                stage
+                for stage in forecast.savings_stage_results
+                if stage.goal_name == goal_name
+            ),
+            None,
+        )
 
     def _target_dashboard_metrics(
         self,
@@ -1099,6 +1403,9 @@ class ExcelWriter:
         if summary_count == 0:
             return
 
+        savings_sheet = sheet.parent["Savings Progress"]
+        header_row, balance_col, label_col = self._savings_chart_columns(savings_sheet)
+
         chart = LineChart()
         chart.title = "Savings Growth"
         chart.y_axis.title = "Savings Balance"
@@ -1106,16 +1413,16 @@ class ExcelWriter:
         chart.style = 13
 
         data = Reference(
-            sheet.parent["Savings Progress"],
-            min_col=3,
-            min_row=1,
-            max_row=summary_count + 1,
+            savings_sheet,
+            min_col=balance_col,
+            min_row=header_row,
+            max_row=header_row + summary_count,
         )
         categories = Reference(
-            sheet.parent["Savings Progress"],
-            min_col=6,
-            min_row=2,
-            max_row=summary_count + 1,
+            savings_sheet,
+            min_col=label_col,
+            min_row=header_row + 1,
+            max_row=header_row + summary_count,
         )
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(categories)
@@ -1124,7 +1431,28 @@ class ExcelWriter:
         chart.width = 14
 
         sheet.add_chart(chart, "D3")
-        sheet.parent["Savings Progress"].column_dimensions["F"].hidden = True
+        savings_sheet.column_dimensions[get_column_letter(label_col)].hidden = True
+
+    def _savings_chart_columns(self, sheet: Worksheet) -> tuple[int, int, int]:
+        """Return header row, balance column, and label column for savings charts."""
+        for row in sheet.iter_rows():
+            values = [cell.value for cell in row]
+            if "Ending Savings Balance" in values and "Chart Label" in values:
+                header_row = row[0].row
+                return (
+                    header_row,
+                    values.index("Ending Savings Balance") + 1,
+                    values.index("Chart Label") + 1,
+                )
+            if "Savings Balance" in values and "Chart Label" in values:
+                header_row = row[0].row
+                return (
+                    header_row,
+                    values.index("Savings Balance") + 1,
+                    values.index("Chart Label") + 1,
+                )
+
+        return 1, 3, 6
 
     def _add_debt_chart(self, sheet: Worksheet, summary_count: int) -> None:
         if summary_count == 0:
@@ -1138,13 +1466,13 @@ class ExcelWriter:
 
         data = Reference(
             sheet.parent["Pay Period Summaries"],
-            min_col=10,
+            min_col=self._header_column(sheet.parent["Pay Period Summaries"], "Active Debt Total"),
             min_row=1,
             max_row=summary_count + 1,
         )
         categories = Reference(
             sheet.parent["Pay Period Summaries"],
-            min_col=12,
+            min_col=self._header_column(sheet.parent["Pay Period Summaries"], "Chart Label"),
             min_row=2,
             max_row=summary_count + 1,
         )
@@ -1155,7 +1483,18 @@ class ExcelWriter:
         chart.width = 14
 
         sheet.add_chart(chart, "D20")
-        sheet.parent["Pay Period Summaries"].column_dimensions["L"].hidden = True
+        label_col = self._header_column(sheet.parent["Pay Period Summaries"], "Chart Label")
+        sheet.parent["Pay Period Summaries"].column_dimensions[
+            get_column_letter(label_col)
+        ].hidden = True
+
+    def _header_column(self, sheet: Worksheet, header: str, header_row: int = 1) -> int:
+        """Return the 1-based column for a header."""
+        for cell in sheet[header_row]:
+            if cell.value == header:
+                return cell.column
+
+        raise ValueError(f"Missing expected header: {header}")
 
     def _format_date_chart_axis(self, chart: LineChart, point_count: int) -> None:
         """Format date-based chart categories with readable labels."""
@@ -1216,3 +1555,9 @@ class ExcelWriter:
             return float(value)
 
         return value
+
+    def _yes_no(self, value: bool | None) -> str | None:
+        if value is None:
+            return None
+
+        return "Yes" if value else "No"

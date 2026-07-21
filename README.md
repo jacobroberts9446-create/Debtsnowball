@@ -225,6 +225,99 @@ because the default forecast window was too short.
 
 ---
 
+## Dated Savings Plans
+
+DebtSnowball supports optional multi-stage savings plans in `config.json`. When
+`savings_plan` is omitted, the original single `savings_goal` behavior is used.
+When `savings_plan` is present, dated goal stages and planned withdrawals become
+the source of truth for savings targets.
+
+Example:
+
+```json
+{
+  "savings_plan": {
+    "goals": [
+      {
+        "name": "August savings",
+        "target_amount": "3900.00",
+        "start_date": "2026-07-17",
+        "target_date": "2026-08-11",
+        "funding_mode": "deadline_priority"
+      },
+      {
+        "name": "Replacement savings",
+        "target_amount": "3000.00",
+        "start_date": "2026-08-12",
+        "funding_mode": "priority_until_funded"
+      }
+    ],
+    "withdrawals": [
+      {
+        "name": "August planned expense",
+        "date": "2026-08-11",
+        "drain_balance": true
+      }
+    ]
+  }
+}
+```
+
+Savings stages use the configured `target_amount` as the desired balance for
+that stage. Bills and debt minimum payments are always protected before savings
+priority is applied. A savings goal can only redirect discretionary snowball
+cash that remains after those required payments.
+
+Funding modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `percentage` | Preserves the original savings split behavior. |
+| `deadline_priority` | Requires a `target_date`; recalculates the per-paycheck savings needed to reach the goal and redirects normal snowball cash to savings when needed. |
+| `priority_until_funded` | Sends available post-minimum cash to savings until the target is reached, then resumes normal snowball funding. |
+
+For deadline goals, eligible paychecks are pay dates on or after the goal
+`start_date` and on or before the `target_date`. A paycheck after the deadline
+does not count toward that deadline, even when a planned withdrawal is processed
+on that later paycheck.
+
+For `deadline_priority` goals, the engine first applies the normal savings
+split, then redirects discretionary snowball cash. If the target still cannot be
+met, it may temporarily reduce the configured personal-expense allowance by the
+exact remaining amount needed across eligible paychecks. This reduction is capped
+at the personal allowance, never makes personal expenses negative, and stops
+after the deadline or once the goal is funded.
+
+If the available discretionary cash is not enough to meet a deadline,
+DebtSnowball does not fabricate funds or reduce required payments. It reports
+the projected deadline balance, projected shortfall, whether the goal is
+feasible, and the additional funding needed.
+
+Planned withdrawals are applied at the beginning of the first paycheck period
+whose processing date is on or after the withdrawal date, before that period's
+new savings contribution. If a withdrawal shares a date with an outgoing goal
+deadline, the outgoing goal is evaluated before the withdrawal is applied.
+
+Withdrawal options:
+
+| Field | Behavior |
+| --- | --- |
+| `drain_balance: true` | Withdraws the full available savings balance and leaves savings at `$0.00`. |
+| `amount` | Withdraws up to the requested amount. If savings is lower, the actual withdrawal is capped and the shortfall is reported. |
+
+Exactly one of `amount` or `drain_balance` must be configured. Savings never
+goes negative. Withdrawals do not change paycheck income, bills, debt balances,
+minimum payments, snowball order, or interest calculations.
+
+Scenario comparisons and the debt-free target calculator reuse the same forecast
+engine, so configured savings stages and planned withdrawals are honored in those
+projections too. Scenario savings-percentage overrides can change contribution
+rate, but they do not remove or move planned withdrawals. Scenario extra
+snowball payments are treated as additional debt money after bills, minimums,
+and required savings priority have already been handled.
+
+---
+
 ## Example Output
 
 The Excel workbook includes:
@@ -313,7 +406,7 @@ Current coverage: **97%**
 | Version | Status | Focus |
 | --- | --- | --- |
 | Version 1.0 ✅ | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
-| Version 2 🚧 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, Configurable Scenarios complete, and Debt-Free Target Calculator in development. |
+| Version 2 🚧 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, Configurable Scenarios complete, Debt-Free Target Calculator complete, Dated Savings Goals and Planned Withdrawals complete, and Deadline-Aware Savings Priority in development. |
 | Version 3 🔮 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
 
 ---
