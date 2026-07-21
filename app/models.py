@@ -235,3 +235,70 @@ class ForecastSummary:
     completed: bool
     debt_payoffs: list[DebtPayoffForecast] = field(default_factory=list)
     periods: list[ForecastPeriod] = field(default_factory=list)
+
+
+@dataclass
+class ScenarioDefinition:
+    """User-defined forecast adjustment for scenario comparison."""
+
+    name: str
+    extra_per_paycheck: Decimal = Decimal("0.00")
+    savings_percentage_override: Decimal | None = None
+    snowball_order_override: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        self.name = self.name.strip()
+        self.extra_per_paycheck = Decimal(str(self.extra_per_paycheck))
+
+        if not self.name:
+            raise ValueError("scenario name must not be blank.")
+        if self.extra_per_paycheck < Decimal("0.00"):
+            raise ValueError("extra_per_paycheck cannot be negative.")
+
+        if self.savings_percentage_override is not None:
+            self.savings_percentage_override = Decimal(
+                str(self.savings_percentage_override)
+            )
+            if not Decimal("0") <= self.savings_percentage_override <= Decimal("1"):
+                raise ValueError(
+                    "savings_percentage_override must be between 0 and 1."
+                )
+
+        if self.snowball_order_override is not None:
+            seen = set()
+            for debt_name in self.snowball_order_override:
+                if debt_name in seen:
+                    raise ValueError("snowball_order_override cannot contain duplicates.")
+                seen.add(debt_name)
+
+
+@dataclass
+class ScenarioResult:
+    """Forecast result for one baseline or alternative scenario."""
+
+    name: str
+    extra_per_paycheck: Decimal
+    forecast: ForecastSummary
+    debt_payoffs: list[DebtPayoffForecast]
+    periods: list[ForecastPeriod]
+
+
+@dataclass
+class ScenarioComparison:
+    """Baseline forecast plus all requested scenario forecasts."""
+
+    baseline: ScenarioResult
+    scenarios: list[ScenarioResult]
+
+
+@dataclass
+class ScenarioDelta:
+    """Scenario metrics measured relative to the baseline forecast."""
+
+    scenario_name: str
+    debt_free_days_saved: int | None
+    savings_goal_days_changed: int | None
+    interest_saved: Decimal
+    additional_snowball_paid: Decimal
+    ending_debt_difference: Decimal
+    ending_savings_difference: Decimal

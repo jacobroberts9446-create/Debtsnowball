@@ -20,9 +20,17 @@ MONEY = Decimal("0.01")
 class ForecastEngine:
     """Simulate future pay periods and summarize payoff milestones."""
 
-    def __init__(self, config: object, max_years: int = 30) -> None:
+    def __init__(
+        self,
+        config: object,
+        max_years: int = 30,
+        extra_snowball_per_paycheck: Decimal = Decimal("0.00"),
+        savings_percentage_override: Decimal | None = None,
+    ) -> None:
         self.config = config
         self.max_years = max_years
+        self.extra_snowball_per_paycheck = extra_snowball_per_paycheck
+        self.savings_percentage_override = savings_percentage_override
 
     def forecast(self) -> ForecastSummary:
         """Run the forecast and return a structured forecast summary."""
@@ -60,7 +68,11 @@ class ForecastEngine:
                 debt_engine=None,
             )
 
-        budget_engine = BudgetEngine(forecast_config)
+        budget_engine = BudgetEngine(
+            forecast_config,
+            extra_snowball_per_paycheck=self.extra_snowball_per_paycheck,
+            savings_percentage_override=self.savings_percentage_override,
+        )
         calendar_engine = CalendarEngine(settings)
         horizon_end = self._add_years(forecast_start_date, self.max_years)
 

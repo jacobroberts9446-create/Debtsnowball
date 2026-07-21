@@ -7,9 +7,13 @@ for each pay period.
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 
 from app.debt_engine import DebtEngine
 from app.scheduler import Scheduler
+
+
+MONEY = Decimal("0.01")
 
 
 @dataclass
@@ -44,12 +48,21 @@ class PayPeriodSummary:
 class BudgetEngine:
     """Builds pay-period budget summaries from project configuration."""
 
-    def __init__(self, config):
+    def __init__(
+        self,
+        config,
+        extra_snowball_per_paycheck: Decimal = Decimal("0.00"),
+        savings_percentage_override: Decimal | None = None,
+    ):
         self.config = config
         self.settings = config.settings
         self.scheduler = Scheduler(config)
         self.debt_engine = DebtEngine(config.debts)
         self.savings_balance = round(float(self.settings.starting_savings), 2)
+        self.extra_snowball_per_paycheck = self._money_float(
+            extra_snowball_per_paycheck
+        )
+        self.savings_percentage_override = savings_percentage_override
 
     def build_plan(self, periods) -> list[PayPeriodSummary]:
         """Process each pay period and return budget summaries."""
@@ -66,6 +79,7 @@ class BudgetEngine:
         )
 
         savings_contribution, snowball_amount = self._split_surplus(surplus)
+        snowball_amount = round(snowball_amount + self.extra_snowball_per_paycheck, 2)
         debt_engine_snowball = self._debt_engine_snowball_amount(snowball_amount)
         debt_result = self.debt_engine.process_pay_period(
             scheduled_payments=scheduled_payments,
@@ -155,11 +169,21 @@ class BudgetEngine:
             return 0.0, round(surplus, 2)
 
         savings_needed = round(self.settings.savings_goal - self.savings_balance, 2)
-        savings_contribution = min(round(surplus * 0.50, 2), savings_needed)
+        savings_contribution = min(
+            round(surplus * self._savings_percentage(), 2),
+            savings_needed,
+        )
         self.savings_balance = round(self.savings_balance + savings_contribution, 2)
         snowball_amount = round(surplus - savings_contribution, 2)
 
         return savings_contribution, snowball_amount
+
+    def _savings_percentage(self) -> float:
+        """Return the scenario-specific savings percentage, or the default rule."""
+        if self.savings_percentage_override is None:
+            return 0.50
+
+        return float(self.savings_percentage_override)
 
     def _debt_engine_snowball_amount(self, snowball_amount: float) -> float:
         """Return the snowball amount to pass before debt-engine rollover is added."""
@@ -196,3 +220,7 @@ class BudgetEngine:
             )
             for debt in debts
         ]
+
+    def _money_float(self, value) -> float:
+        """Convert Decimal-compatible money values to a rounded float."""
+        return float(Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP))
