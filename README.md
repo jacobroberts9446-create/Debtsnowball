@@ -237,31 +237,31 @@ Example:
 ```json
 {
   "savings_plan": {
+    "deadline_priority_enabled": false,
     "goals": [
       {
-        "name": "August savings",
-        "target_amount": "3900.00",
+        "name": "August withdrawal",
+        "target_amount": "2400.00",
         "start_date": "2026-07-17",
         "target_date": "2026-08-11",
         "funding_mode": "deadline_priority"
-      },
-      {
-        "name": "Replacement savings",
-        "target_amount": "3000.00",
-        "start_date": "2026-08-12",
-        "funding_mode": "priority_until_funded"
       }
     ],
     "withdrawals": [
       {
         "name": "August planned expense",
         "date": "2026-08-11",
-        "drain_balance": true
+        "amount": "2400.00"
       }
     ]
   }
 }
 ```
+
+`deadline_priority_enabled` is the explicit feature switch. When it is `false`,
+configured deadline goals and withdrawals are treated as a development template:
+they do not appear as active goals, do not alter the live forecast, and do not
+process withdrawals.
 
 Savings stages use the configured `target_amount` as the desired balance for
 that stage. Bills and debt minimum payments are always protected before savings

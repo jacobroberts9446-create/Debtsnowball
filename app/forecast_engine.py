@@ -119,6 +119,15 @@ class ForecastEngine:
                         summary.goal_progress_percentage
                     ),
                     savings_stage_changed=summary.savings_stage_changed,
+                    required_fixed_expenses=self._money(
+                        summary.required_fixed_expenses
+                    ),
+                    normal_personal_allowance=self._money(
+                        summary.normal_personal_allowance
+                    ),
+                    actual_personal_allowance=self._money(
+                        summary.actual_personal_allowance
+                    ),
                     available_after_required_payments=self._money(
                         summary.available_after_required_payments
                     ),

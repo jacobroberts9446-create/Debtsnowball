@@ -218,9 +218,9 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     assert workbook["Dashboard"].freeze_panes == "A4"
     assert workbook["Dashboard"]._charts[0].x_axis.number_format.formatCode == "@"
     assert workbook["Dashboard"]._charts[0].x_axis.tickLblSkip == 1
-    assert workbook["Pay Period Summaries"].auto_filter.ref == "A1:T3"
-    assert workbook["Pay Period Summaries"]["T2"].value == "Jan 02"
-    assert workbook["Pay Period Summaries"].column_dimensions["T"].hidden is True
+    assert workbook["Pay Period Summaries"].auto_filter.ref == "A1:W3"
+    assert workbook["Pay Period Summaries"]["W2"].value == "Jan 02"
+    assert workbook["Pay Period Summaries"].column_dimensions["W"].hidden is True
     assert workbook["Active Debts"].max_row == 4
     assert workbook["Paid-Off Debts"].max_row == 2
     assert workbook["Savings Progress"]["C3"].value == 1000

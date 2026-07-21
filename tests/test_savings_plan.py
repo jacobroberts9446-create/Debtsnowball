@@ -60,8 +60,10 @@ def staged_plan(
     withdrawal=None,
     first_mode=SavingsFundingMode.PERCENTAGE,
     second_mode=SavingsFundingMode.PERCENTAGE,
+    enabled=True,
 ):
     return SavingsPlan(
+        deadline_priority_enabled=enabled,
         goals=[
             SavingsGoalStage(
                 name="First goal",
@@ -238,7 +240,8 @@ def test_deadline_priority_personal_reduction_is_capped_at_allowance():
     summary = BudgetEngine(config).process_pay_period(period)
 
     assert summary.personal_expense_reduction == 100.0
-    assert summary.bills_paid == 0.0
+    assert summary.bills_paid == 100.0
+    assert summary.actual_personal_allowance == 0.0
     assert summary.savings_contribution == 1000.0
 
 
@@ -269,6 +272,7 @@ def test_priority_until_funded_rebuilds_savings_before_snowball_resumes():
 
 def test_current_plan_priority_reaches_maximum_possible_deadline_balance():
     config = Config().load("config.json")
+    config.savings_plan.deadline_priority_enabled = True
     periods = CalendarEngine(config.settings).generate(date(2026, 8, 14))
 
     engine = BudgetEngine(config)
@@ -277,31 +281,32 @@ def test_current_plan_priority_reaches_maximum_possible_deadline_balance():
     withdrawal = engine.planned_withdrawal_results()[0]
 
     assert summaries[0].available_after_required_payments == 430.0
-    assert summaries[0].bills_paid == 349.5
+    assert summaries[0].bills_paid == 766.0
     assert summaries[0].normal_savings_contribution == 215.0
     assert summaries[0].snowball_reduction == 215.0
-    assert summaries[0].personal_expense_reduction == 416.5
-    assert summaries[0].savings_contribution == 846.5
+    assert summaries[0].personal_expense_reduction == 0.0
+    assert summaries[0].savings_contribution == 430.0
     assert summaries[0].snowball_payment == 0.0
     assert summaries[1].available_after_required_payments == 1137.0
-    assert summaries[1].bills_paid == 507.5
-    assert summaries[1].normal_savings_contribution == 568.5
-    assert summaries[1].snowball_reduction == 568.5
-    assert summaries[1].personal_expense_reduction == 416.5
-    assert summaries[1].savings_contribution == 1553.5
-    assert summaries[1].snowball_payment == 0.0
-    assert first_stage.amount_at_deadline == Decimal("3900.00")
+    assert summaries[1].bills_paid == 924.0
+    assert summaries[1].normal_savings_contribution == 470.0
+    assert summaries[1].snowball_reduction == 0.0
+    assert summaries[1].personal_expense_reduction == 0.0
+    assert summaries[1].savings_contribution == 470.0
+    assert summaries[1].snowball_payment == 667.0
+    assert first_stage.amount_at_deadline == Decimal("2400.00")
     assert first_stage.shortfall_at_deadline == Decimal("0.00")
     assert first_stage.feasible_under_current_plan is True
     assert first_stage.additional_funding_needed == Decimal("0.00")
-    assert withdrawal.actual_amount_withdrawn == Decimal("3900.00")
-    assert summaries[2].active_savings_goal_name == "Replacement savings"
+    assert withdrawal.actual_amount_withdrawn == Decimal("2400.00")
+    assert summaries[2].active_savings_goal_name is None
     assert summaries[2].savings_balance_after_withdrawal == 0.0
-    assert summaries[2].savings_contribution == 430.0
+    assert summaries[2].personal_expense_reduction == 0.0
 
 
 def test_august_14_paycheck_is_not_eligible_for_august_11_deadline():
     config = Config().load("config.json")
+    config.savings_plan.deadline_priority_enabled = True
     periods = CalendarEngine(config.settings).generate(date(2026, 8, 14))
 
     engine = BudgetEngine(config)
@@ -309,7 +314,51 @@ def test_august_14_paycheck_is_not_eligible_for_august_11_deadline():
     first_stage = engine.savings_stage_results()[0]
 
     assert first_stage.eligible_paychecks_remaining == 0
-    assert first_stage.amount_at_deadline == Decimal("3900.00")
+    assert first_stage.amount_at_deadline == Decimal("2400.00")
+
+
+def test_disabled_deadline_priority_plan_preserves_standard_allocation():
+    config = Config().load("config.json")
+    periods = CalendarEngine(config.settings).generate(date(2026, 8, 14))
+
+    engine = BudgetEngine(config)
+    summaries = engine.build_plan(periods)
+
+    assert config.savings_plan.deadline_priority_enabled is False
+    assert summaries[0].active_savings_goal_name is None
+    assert summaries[0].savings_contribution == 215.0
+    assert summaries[0].snowball_payment == 215.0
+    assert summaries[0].personal_expense_reduction == 0.0
+    assert summaries[1].savings_contribution == 568.5
+    assert summaries[1].snowball_payment == 568.5
+    assert summaries[1].personal_expense_reduction == 0.0
+    assert summaries[2].planned_withdrawal_amount == 0.0
+    assert engine.savings_stage_results() == []
+    assert engine.planned_withdrawal_results() == []
+
+
+def test_disabled_deadline_priority_forecast_preserves_standard_totals():
+    config = Config().load("config.json")
+    disabled_forecast = ForecastEngine(config).forecast()
+    no_plan_config = deepcopy(config)
+    no_plan_config.savings_plan = None
+    standard_forecast = ForecastEngine(no_plan_config).forecast()
+
+    assert disabled_forecast.debt_free_date == standard_forecast.debt_free_date
+    assert disabled_forecast.total_snowball_payments == (
+        standard_forecast.total_snowball_payments
+    )
+    assert disabled_forecast.total_minimum_payments == (
+        standard_forecast.total_minimum_payments
+    )
+    assert [period.snowball_paid for period in disabled_forecast.periods[:3]] == [
+        period.snowball_paid for period in standard_forecast.periods[:3]
+    ]
+    assert all(
+        period.personal_expense_reduction == Decimal("0.00")
+        for period in disabled_forecast.periods[:6]
+    )
+    assert disabled_forecast.planned_withdrawal_results == []
 
 
 def test_state_is_not_mutated_and_repeated_forecasts_are_deterministic():
@@ -426,24 +475,23 @@ def test_priority_savings_moves_debt_free_date_later_than_percentage_mode():
 def test_current_config_savings_plan_parses():
     config = Config().load("config.json")
 
-    assert config.savings_plan.goals[0].target_amount == Decimal("3900.00")
+    assert config.savings_plan.deadline_priority_enabled is False
+    assert config.savings_plan.goals[0].name == "August withdrawal"
+    assert config.savings_plan.goals[0].target_amount == Decimal("2400.00")
     assert config.savings_plan.goals[0].target_date == date(2026, 8, 11)
     assert config.savings_plan.goals[0].funding_mode == (
         SavingsFundingMode.DEADLINE_PRIORITY
     )
     assert config.savings_plan.withdrawals[0].withdrawal_date == date(2026, 8, 11)
-    assert config.savings_plan.withdrawals[0].drain_balance is True
-    assert config.savings_plan.goals[1].start_date == date(2026, 8, 12)
-    assert config.savings_plan.goals[1].target_amount == Decimal("3000.00")
-    assert config.savings_plan.goals[1].funding_mode == (
-        SavingsFundingMode.PRIORITY_UNTIL_FUNDED
-    )
+    assert config.savings_plan.withdrawals[0].amount == Decimal("2400.00")
+    assert config.savings_plan.withdrawals[0].drain_balance is False
 
 
 @pytest.mark.parametrize(
     "plan",
     [
         {"goals": "bad", "withdrawals": []},
+        {"deadline_priority_enabled": "false", "goals": [], "withdrawals": []},
         {
             "goals": [
                 {"name": "A", "target_amount": "100.00", "start_date": "bad-date"}

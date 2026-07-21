@@ -88,6 +88,9 @@ class Config:
 
         raw_goals = raw_plan.get("goals", [])
         raw_withdrawals = raw_plan.get("withdrawals", [])
+        deadline_priority_enabled = raw_plan.get("deadline_priority_enabled", False)
+        if not isinstance(deadline_priority_enabled, bool):
+            raise ValueError("savings_plan deadline_priority_enabled must be boolean.")
         if not isinstance(raw_goals, list):
             raise ValueError("savings_plan goals must be a list.")
         if not isinstance(raw_withdrawals, list):
@@ -96,7 +99,11 @@ class Config:
         goals = self._load_savings_goals(raw_goals)
         withdrawals = self._load_savings_withdrawals(raw_withdrawals)
         self._validate_savings_plan_order(goals)
-        return SavingsPlan(goals=goals, withdrawals=withdrawals)
+        return SavingsPlan(
+            deadline_priority_enabled=deadline_priority_enabled,
+            goals=goals,
+            withdrawals=withdrawals,
+        )
 
     def _load_savings_goals(self, raw_goals: list) -> list[SavingsGoalStage]:
         goals = []

@@ -226,6 +226,9 @@ class ForecastPeriod:
     ending_savings_balance: Decimal | None = None
     goal_progress_percentage: Decimal | None = None
     savings_stage_changed: bool = False
+    required_fixed_expenses: Decimal = Decimal("0.00")
+    normal_personal_allowance: Decimal = Decimal("0.00")
+    actual_personal_allowance: Decimal = Decimal("0.00")
     available_after_required_payments: Decimal = Decimal("0.00")
     normal_savings_contribution: Decimal = Decimal("0.00")
     deadline_required_savings_contribution: Decimal = Decimal("0.00")
@@ -375,6 +378,7 @@ class PlannedSavingsWithdrawal:
 class SavingsPlan:
     """Ordered savings goals and planned withdrawals."""
 
+    deadline_priority_enabled: bool = False
     goals: list[SavingsGoalStage] = field(default_factory=list)
     withdrawals: list[PlannedSavingsWithdrawal] = field(default_factory=list)
 

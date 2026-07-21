@@ -45,6 +45,7 @@ def make_config():
         ],
         scenarios=[],
         savings_plan=SavingsPlan(
+            deadline_priority_enabled=True,
             goals=[
                 SavingsGoalStage(
                     name="August savings",
@@ -68,7 +69,14 @@ def make_config():
                 )
             ],
         ),
-    )
+)
+
+
+def value_for_header(sheet, header: str, row: int, header_row: int = 1):
+    for cell in sheet[header_row]:
+        if cell.value == header:
+            return sheet.cell(row=row, column=cell.column).value
+    raise AssertionError(f"Missing header: {header}")
 
 
 def test_savings_plan_sections_and_dashboard_metrics(tmp_path):
@@ -100,13 +108,13 @@ def test_savings_plan_sections_and_dashboard_metrics(tmp_path):
     assert sheet["H9"].value.date() == date(2026, 8, 13)
     assert sheet["A12"].value == "Savings Progress Detail"
     assert sheet["B30"].value == "Replacement savings"
-    assert sheet["C30"].value == 1000
-    assert sheet["F30"].value > 0
-    assert sheet["H30"].value > 0
-    assert sheet["J30"].value == 0
-    assert sheet["N30"].value == 3000
-    assert sheet["P30"].value == "Aug 13"
-    assert sheet.column_dimensions["P"].hidden is True
+    assert sheet["F30"].value == 1000
+    assert sheet["I30"].value > 0
+    assert sheet["K30"].value > 0
+    assert sheet["M30"].value == 0
+    assert sheet["Q30"].value == 3000
+    assert sheet["S30"].value == "Aug 13"
+    assert sheet.column_dimensions["S"].hidden is True
     assert dashboard["A12"].value == "Active Savings Goal"
     assert dashboard["B12"].value == "Replacement savings"
     assert dashboard["A13"].value == "Active Savings Target"
@@ -116,7 +124,7 @@ def test_savings_plan_sections_and_dashboard_metrics(tmp_path):
     workbook.close()
 
 
-def test_current_plan_workbook_reports_deadline_priority_shortfall(tmp_path):
+def test_current_plan_workbook_preserves_disabled_deadline_priority(tmp_path):
     config = Config().load("config.json")
     forecast_config = deepcopy(config)
     periods = CalendarEngine(config.settings).generate(date(2026, 12, 31))
@@ -130,23 +138,46 @@ def test_current_plan_workbook_reports_deadline_priority_shortfall(tmp_path):
     pay_periods = workbook["Pay Period Summaries"]
     savings = workbook["Savings Progress"]
 
-    assert pay_periods["H2"].value == 430
-    assert pay_periods["K2"].value == 846.5
-    assert pay_periods["M2"].value == 215
-    assert pay_periods["N2"].value == 416.5
-    assert pay_periods["O2"].value == 0
-    assert pay_periods["H3"].value == 1137
-    assert pay_periods["K3"].value == 1553.5
-    assert pay_periods["M3"].value == 568.5
-    assert pay_periods["N3"].value == 416.5
-    assert pay_periods["O3"].value == 0
-    assert savings["I4"].value == 3900
+    assert value_for_header(pay_periods, "Savings Goal", 2) is None
+    assert value_for_header(pay_periods, "Bills Paid", 2) == 766
+    assert value_for_header(pay_periods, "Savings Deposit", 2) == 215
+    assert value_for_header(pay_periods, "Snowball Redirected To Savings", 2) == 0
+    assert value_for_header(pay_periods, "Personal Expense Reduction", 2) == 0
+    assert value_for_header(pay_periods, "Snowball Payment", 2) == 215
+    assert value_for_header(pay_periods, "Savings Deposit", 3) == 568.5
+    assert value_for_header(pay_periods, "Snowball Payment", 3) == 568.5
+    assert savings["A1"].value == "Pay Date"
+    assert savings["B2"].value == 215
+    workbook.close()
+
+
+def test_enabled_current_plan_workbook_reports_temporary_deadline_goal(tmp_path):
+    config = Config().load("config.json")
+    config.savings_plan.deadline_priority_enabled = True
+    forecast_config = deepcopy(config)
+    periods = CalendarEngine(config.settings).generate(date(2026, 12, 31))
+    summaries = BudgetEngine(config).build_plan(periods)
+    forecast = ForecastEngine(forecast_config).forecast()
+    workbook_path = tmp_path / "enabled_plan.xlsx"
+
+    ExcelWriter(workbook_path).write(summaries, forecast)
+
+    workbook = load_workbook(workbook_path, data_only=True)
+    pay_periods = workbook["Pay Period Summaries"]
+    savings = workbook["Savings Progress"]
+
+    assert value_for_header(pay_periods, "Bills Paid", 2) == 766
+    assert value_for_header(pay_periods, "Savings Deposit", 2) == 430
+    assert value_for_header(pay_periods, "Snowball Redirected To Savings", 2) == 215
+    assert value_for_header(pay_periods, "Personal Expense Reduction", 2) == 0
+    assert value_for_header(pay_periods, "Snowball Payment", 2) == 0
+    assert value_for_header(pay_periods, "Savings Deposit", 3) == 470
+    assert value_for_header(pay_periods, "Snowball Payment", 3) == 667
+    assert value_for_header(pay_periods, "Active Debt Total", 4) > 0
+    assert savings["A4"].value == "August withdrawal"
+    assert savings["I4"].value == 2400
     assert savings["J4"].value == 0
-    assert savings["K4"].value == 0
     assert savings["L4"].value == "Yes"
-    assert savings["E9"].value == 3900
-    assert savings["G9"].value == 0
-    assert savings["B16"].value == "Replacement savings"
-    assert savings["F16"].value == 430
-    assert savings["L16"].value == 3900
+    assert savings["E8"].value == 2400
+    assert savings["G8"].value == 0
     workbook.close()
