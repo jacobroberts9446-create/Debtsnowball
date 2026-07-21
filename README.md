@@ -112,6 +112,71 @@ output/debtsnowball_plan.xlsx
 
 ---
 
+## Configurable Scenarios
+
+Scenario comparisons are configured in `config.json` under the optional
+`scenarios` field. `Baseline` is always generated automatically, so the list only
+needs alternative scenarios.
+
+If `scenarios` is missing, `null`, or an empty list, DebtSnowball generates a
+baseline-only Scenario Comparison worksheet. It does not add default extra-payment
+scenarios unless you configure them.
+
+Supported fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | Yes | Display name for the scenario. Must be unique. |
+| `extra_per_paycheck` | No | Extra money added directly to snowball funding each paycheck. Defaults to `0.00`. |
+| `savings_percentage` | No | Decimal savings split override, such as `0.25` for 25%. Omit it to keep the normal savings rule. |
+| `snowball_order` | No | Debt names to prioritize first. Omitted debts are appended in their original order. |
+
+Baseline-only configuration:
+
+```json
+{
+  "scenarios": []
+}
+```
+
+Extra-payment scenarios:
+
+```json
+{
+  "scenarios": [
+    {
+      "name": "Extra $75",
+      "extra_per_paycheck": "75.00"
+    },
+    {
+      "name": "Extra $150",
+      "extra_per_paycheck": "150.00"
+    }
+  ]
+}
+```
+
+Savings and payoff-order scenario:
+
+```json
+{
+  "scenarios": [
+    {
+      "name": "Aggressive payoff",
+      "extra_per_paycheck": "300.00",
+      "savings_percentage": "0.00",
+      "snowball_order": ["Ollo", "Citi", "Lending USA"]
+    }
+  ]
+}
+```
+
+Common validation errors include blank or duplicate scenario names, negative or
+invalid extra payments, savings percentages outside `0` to `1`, non-list
+`snowball_order` values, blank or duplicate debt names, and unknown debt names.
+
+---
+
 ## Example Output
 
 The Excel workbook includes:
@@ -123,6 +188,8 @@ The Excel workbook includes:
 | Active Debts | Debt balances over time for debts still being paid. |
 | Paid-Off Debts | Debts that have reached a zero balance. |
 | Savings Progress | Savings deposits, savings balance, goal, and remaining amount to goal. |
+| Forecast | Future payoff, savings, interest, and balance projections. |
+| Scenario Comparison | Baseline and configured scenario comparisons with deltas, payoff dates, and charts. |
 | Charts | Savings growth and debt reduction visualizations. |
 
 ---
@@ -166,6 +233,8 @@ DebtSnowball/
 | Scheduler | Assigns bills and debt minimums to the last paycheck before their due date. |
 | BudgetEngine | Orchestrates each pay period and produces structured `PayPeriodSummary` objects. |
 | DebtEngine | Accrues interest, pays minimums, applies snowball payments, and tracks paid-off debts. |
+| ForecastEngine | Simulates future pay periods without mutating the live configuration. |
+| ScenarioEngine | Compares baseline forecasts against configured alternative scenarios. |
 | ExcelWriter | Creates the Excel workbook, dashboard worksheet, data worksheets, and charts. |
 | Database | Provides SQLite persistence support for generated budget history. |
 
@@ -194,7 +263,7 @@ Current coverage: **97%**
 | Version | Status | Focus |
 | --- | --- | --- |
 | Version 1.0 ✅ | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
-| Version 2 🚧 | In development | Forecast Engine, forecast workbook reporting, Scenario Comparison Engine complete, and Scenario Comparison Reporting in development. |
+| Version 2 🚧 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, and Configurable Scenarios in development. |
 | Version 3 🔮 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
 
 ---

@@ -67,5 +67,7 @@
       "due_day": 10,
       "snowball_order": 6
     }
-  ]
+  ],
+
+  "scenarios": []
 }

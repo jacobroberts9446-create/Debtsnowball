@@ -252,6 +252,8 @@ class ScenarioDefinition:
 
         if not self.name:
             raise ValueError("scenario name must not be blank.")
+        if not self.extra_per_paycheck.is_finite():
+            raise ValueError("extra_per_paycheck must be finite.")
         if self.extra_per_paycheck < Decimal("0.00"):
             raise ValueError("extra_per_paycheck cannot be negative.")
 
@@ -259,6 +261,8 @@ class ScenarioDefinition:
             self.savings_percentage_override = Decimal(
                 str(self.savings_percentage_override)
             )
+            if not self.savings_percentage_override.is_finite():
+                raise ValueError("savings_percentage_override must be finite.")
             if not Decimal("0") <= self.savings_percentage_override <= Decimal("1"):
                 raise ValueError(
                     "savings_percentage_override must be between 0 and 1."
