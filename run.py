@@ -6,6 +6,7 @@ DebtSnowball
 
 import argparse
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
@@ -21,6 +22,18 @@ from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
 APP_VERSION = "1.1.0"
+InputFunc = Callable[[str], str]
+OutputFunc = Callable[[str], None]
+MenuAction = Callable[[], bool]
+
+
+@dataclass(frozen=True)
+class MenuOption:
+    """One selectable interactive menu option."""
+
+    key: str
+    label: str
+    action: MenuAction
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -36,42 +49,143 @@ def main(argv: list[str] | None = None) -> None:
 
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
-    input_func: Callable[[str], str] = input,
-    output_func: Callable[[str], None] = print,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
 ) -> None:
     """Show the interactive menu for normal no-argument runs."""
     generate_budget_plan_func = generate_budget_plan_func or generate_budget_plan
+    options = build_main_menu_options(
+        generate_budget_plan_func,
+        input_func=input_func,
+        output_func=output_func,
+    )
 
+    run_menu(
+        title=f"DebtSnowball v{APP_VERSION}",
+        options=options,
+        input_func=input_func,
+        output_func=output_func,
+    )
+
+
+def run_menu(
+    title: str,
+    options: list[MenuOption],
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> None:
+    """Display a menu until an action requests exit."""
+    option_map = {option.key: option for option in options}
     while True:
-        output_func("")
-        output_func(f"DebtSnowball v{APP_VERSION}")
-        output_func("")
-        output_func("1. Generate Budget Plan")
-        output_func("2. Help")
-        output_func("3. Exit")
-        output_func("")
+        display_menu(title, options, output_func)
 
         choice = input_func("Choose an option: ").strip()
+        option = option_map.get(choice)
 
-        if choice == "1":
-            generate_budget_plan_func()
-            return
-        if choice == "2":
-            show_menu_help(output_func)
+        if option is not None:
+            should_exit = option.action()
+            if should_exit:
+                return
             continue
-        if choice == "3":
-            output_func("Goodbye.")
-            return
 
-        output_func("Please choose 1, 2, or 3.")
+        output_func(f"Please choose one of: {', '.join(option_map)}.")
 
 
-def show_menu_help(output_func: Callable[[str], None] = print) -> None:
-    """Print brief help for the interactive menu."""
+def display_menu(
+    title: str,
+    options: list[MenuOption],
+    output_func: OutputFunc = print,
+) -> None:
+    """Print a numbered interactive menu."""
+    output_func("")
+    output_func(title)
+    output_func("")
+    for option in options:
+        output_func(f"{option.key}. {option.label}")
+    output_func("")
+
+
+def build_main_menu_options(
+    generate_budget_plan_func: Callable[[], None],
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> list[MenuOption]:
+    """Build the top-level interactive menu options."""
+    return [
+        MenuOption(
+            "1",
+            "Generate Budget Plan",
+            lambda: run_generate_budget_plan_action(generate_budget_plan_func),
+        ),
+        MenuOption(
+            "2",
+            "Saved Plans",
+            lambda: show_placeholder_screen(
+                "Saved Plans is coming in a future v1.1 update.",
+                input_func=input_func,
+                output_func=output_func,
+            ),
+        ),
+        MenuOption(
+            "3",
+            "History",
+            lambda: show_placeholder_screen(
+                "History tools are coming in a future v1.1 update.",
+                input_func=input_func,
+                output_func=output_func,
+            ),
+        ),
+        MenuOption(
+            "4",
+            "Help",
+            lambda: show_menu_help(input_func=input_func, output_func=output_func),
+        ),
+        MenuOption("5", "Exit", lambda: exit_menu(output_func)),
+    ]
+
+
+def run_generate_budget_plan_action(generate_budget_plan_func: Callable[[], None]) -> bool:
+    """Run budget generation and exit the interactive menu."""
+    generate_budget_plan_func()
+    return True
+
+
+def show_placeholder_screen(
+    message: str,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Show a future-feature message before returning to the main menu."""
+    output_func("")
+    output_func(message)
+    wait_for_enter(input_func)
+    return False
+
+
+def wait_for_enter(input_func: InputFunc = input) -> None:
+    """Wait for the user to press Enter."""
+    input_func("Press Enter to return to the main menu...")
+
+
+def exit_menu(output_func: OutputFunc = print) -> bool:
+    """Exit the interactive menu cleanly."""
+    output_func("Goodbye.")
+    return True
+
+
+def show_menu_help(
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Print brief help for the interactive menu before returning."""
     output_func("")
     output_func("Generate Budget Plan: creates the budget plan and Excel workbook.")
+    output_func("Saved Plans: opens saved plan tools when they are available.")
+    output_func("History: opens plan history tools when they are available.")
     output_func("Help: explains the menu options.")
     output_func("Exit: closes DebtSnowball without generating a plan.")
+    wait_for_enter(input_func)
+    return False
 
 
 def generate_budget_plan() -> None:
@@ -150,7 +264,6 @@ def generate_budget_plan() -> None:
         print()
 
     print(f"Workbook created: {workbook_path}")
-
 
 def build_scenario_comparison(config):
     """Build baseline plus configured scenario forecasts."""
