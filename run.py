@@ -49,13 +49,18 @@ def main(argv: list[str] | None = None) -> None:
 
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
+    plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    config_loader: Callable[[], Config] | None = None,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> None:
     """Show the interactive menu for normal no-argument runs."""
     generate_budget_plan_func = generate_budget_plan_func or generate_budget_plan
+    config_loader = config_loader or load_current_config
     options = build_main_menu_options(
         generate_budget_plan_func,
+        plan_history_service_factory=plan_history_service_factory,
+        config_loader=config_loader,
         input_func=input_func,
         output_func=output_func,
     )
@@ -107,10 +112,13 @@ def display_menu(
 
 def build_main_menu_options(
     generate_budget_plan_func: Callable[[], None],
+    plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    config_loader: Callable[[], Config] | None = None,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> list[MenuOption]:
     """Build the top-level interactive menu options."""
+    config_loader = config_loader or load_current_config
     return [
         MenuOption(
             "1",
@@ -120,8 +128,9 @@ def build_main_menu_options(
         MenuOption(
             "2",
             "Saved Plans",
-            lambda: show_placeholder_screen(
-                "Saved Plans is coming in a future v1.1 update.",
+            lambda: run_saved_plans_menu(
+                plan_history_service_factory=plan_history_service_factory,
+                config_loader=config_loader,
                 input_func=input_func,
                 output_func=output_func,
             ),
@@ -148,6 +157,125 @@ def run_generate_budget_plan_action(generate_budget_plan_func: Callable[[], None
     """Run budget generation and exit the interactive menu."""
     generate_budget_plan_func()
     return True
+
+
+def run_saved_plans_menu(
+    plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    config_loader: Callable[[], Config] | None = None,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Open saved-plan tools and return to the main menu when finished."""
+    config_loader = config_loader or load_current_config
+    try:
+        service = plan_history_service_factory()
+    except (FileNotFoundError, ValueError) as exc:
+        output_func(f"Error: {exc}")
+        wait_for_enter(input_func)
+        return False
+    options = [
+        MenuOption(
+            "1",
+            "List Saved Plans",
+            lambda: list_saved_plans_action(service, input_func, output_func),
+        ),
+        MenuOption(
+            "2",
+            "Save Current Plan",
+            lambda: save_current_plan_action(
+                service,
+                config_loader,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("3", "Back", lambda: True),
+    ]
+
+    run_menu(
+        title="Saved Plans",
+        options=options,
+        input_func=input_func,
+        output_func=output_func,
+    )
+    return False
+
+
+def list_saved_plans_action(
+    service: PlanHistoryService,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """List saved plans, then return to the saved-plans submenu."""
+    output_func("")
+    try:
+        plans = service.list_plans()
+    except ValueError as exc:
+        output_func(f"Error: {exc}")
+    else:
+        if not plans:
+            output_func("No saved plans found.")
+        for plan in plans:
+            output_func(f"{plan.id}: {plan.name}")
+            if plan.description:
+                output_func(f"   {plan.description}")
+
+    wait_for_enter(input_func)
+    return False
+
+
+def save_current_plan_action(
+    service: PlanHistoryService,
+    config_loader: Callable[[], Config],
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Prompt for saved-plan details and save through PlanHistoryService."""
+    output_func("")
+    name = input_func("Plan name: ").strip()
+    if not name:
+        output_func("Plan name cannot be blank.")
+        wait_for_enter(input_func)
+        return False
+
+    description = input_func("Description (optional): ").strip()
+    try:
+        config = config_loader()
+        existing = [plan for plan in service.list_plans() if plan.name == name]
+    except (FileNotFoundError, ValueError) as exc:
+        output_func(f"Error: {exc}")
+        wait_for_enter(input_func)
+        return False
+
+    if existing:
+        confirm = input_func(
+            f"A plan named '{name}' already exists. Save a new version? [y/N]: "
+        ).strip()
+        if confirm.casefold() not in {"y", "yes"}:
+            output_func("Save cancelled.")
+            wait_for_enter(input_func)
+            return False
+
+    try:
+        result = save_current_plan(
+            service,
+            config,
+            name=name,
+            description=description,
+            change_note="Saved from interactive menu",
+            source="interactive",
+            force=bool(existing),
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        output_func(f"Error: {exc}")
+    else:
+        if result[0] == "created":
+            output_func(f"Created plan {result[1].id}: {result[1].name}")
+        else:
+            output_func(f"Saved version {result[1].version_number} for {name}")
+
+    wait_for_enter(input_func)
+    return False
 
 
 def show_placeholder_screen(
@@ -186,6 +314,43 @@ def show_menu_help(
     output_func("Exit: closes DebtSnowball without generating a plan.")
     wait_for_enter(input_func)
     return False
+
+
+def load_current_config() -> Config:
+    """Load the current application configuration."""
+    return Config().load()
+
+
+def save_current_plan(
+    service: PlanHistoryService,
+    config: Config,
+    *,
+    name: str,
+    description: str = "",
+    change_note: str = "Saved from CLI",
+    source: str = "cli",
+    force: bool = False,
+):
+    """Create a plan or save a new version using the existing service behavior."""
+    existing = [plan for plan in service.list_plans() if plan.name == name]
+    if existing:
+        version = service.save_plan_version(
+            existing[0].id,
+            config,
+            change_note=change_note,
+            source=source,
+            force=force,
+        )
+        return "version", version
+
+    plan = service.create_plan(
+        name,
+        config,
+        description=description,
+        change_note=change_note,
+        source=source,
+    )
+    return "created", plan
 
 
 def generate_budget_plan() -> None:
@@ -375,25 +540,20 @@ def run_cli(args) -> None:
 def run_plan_command(service: PlanHistoryService, args) -> None:
     """Run plan-history CLI commands."""
     if args.plan_command == "save":
-        config = Config().load()
-        existing = [plan for plan in service.list_plans() if plan.name == args.name]
-        if existing:
-            version = service.save_plan_version(
-                existing[0].id,
-                config,
-                change_note=args.note,
-                source="cli",
-                force=args.force,
-            )
+        result = save_current_plan(
+            service,
+            load_current_config(),
+            name=args.name,
+            description=args.description,
+            change_note=args.note,
+            source="cli",
+            force=args.force,
+        )
+        if result[0] == "version":
+            version = result[1]
             print(f"Saved version {version.version_number} for {args.name}")
         else:
-            plan = service.create_plan(
-                args.name,
-                config,
-                description=args.description,
-                change_note=args.note,
-                source="cli",
-            )
+            plan = result[1]
             print(f"Created plan {plan.id}: {plan.name}")
     elif args.plan_command == "list":
         for plan in service.list_plans():
