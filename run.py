@@ -22,6 +22,7 @@ from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
 APP_VERSION = "1.1.0"
+BANNER_WIDTH = 60
 InputFunc = Callable[[str], str]
 OutputFunc = Callable[[str], None]
 MenuAction = Callable[[], bool]
@@ -34,6 +35,60 @@ class MenuOption:
     key: str
     label: str
     action: MenuAction
+
+
+def print_application_banner(output_func: OutputFunc = print) -> None:
+    """Print the standard DebtSnowball application banner."""
+    output_func("=" * BANNER_WIDTH)
+    output_func(f"DebtSnowball v{APP_VERSION}")
+    output_func("Personal Debt Planning")
+    output_func("=" * BANNER_WIDTH)
+
+
+def print_section_header(title: str, output_func: OutputFunc = print) -> None:
+    """Print a consistent plain-text section header."""
+    output_func("")
+    output_func(title)
+    output_func("-" * len(title))
+
+
+def print_menu_title(title: str, output_func: OutputFunc = print) -> None:
+    """Print a reusable menu title."""
+    output_func("")
+    output_func(title)
+    output_func("-" * len(title))
+    output_func("")
+
+
+def print_success(message: str, output_func: OutputFunc = print) -> None:
+    """Print a consistently formatted success message."""
+    output_func(f"Success: {message}")
+
+
+def print_warning(message: str, output_func: OutputFunc = print) -> None:
+    """Print a consistently formatted warning message."""
+    output_func(f"Warning: {message}")
+
+
+def print_error(message: str, output_func: OutputFunc = print) -> None:
+    """Print a consistently formatted error message."""
+    output_func(f"Error: {message}")
+
+
+def print_table(
+    headers: list[str],
+    rows: list[list[str]],
+    output_func: OutputFunc = print,
+) -> None:
+    """Print a simple aligned plain-text table."""
+    widths = [
+        max(len(header), *(len(row[index]) for row in rows))
+        for index, header in enumerate(headers)
+    ]
+    output_func(" | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
+    output_func("-+-".join("-" * width for width in widths))
+    for row in rows:
+        output_func(" | ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -93,7 +148,7 @@ def run_menu(
                 return
             continue
 
-        output_func(f"Please choose one of: {', '.join(option_map)}.")
+        print_warning(f"Please choose one of: {', '.join(option_map)}.", output_func)
 
 
 def display_menu(
@@ -103,10 +158,13 @@ def display_menu(
 ) -> None:
     """Print a numbered interactive menu."""
     output_func("")
-    output_func(title)
-    output_func("")
+    if title == f"DebtSnowball v{APP_VERSION}":
+        print_application_banner(output_func)
+    else:
+        print_menu_title(title, output_func)
+    key_width = max(len(option.key) for option in options)
     for option in options:
-        output_func(f"{option.key}. {option.label}")
+        output_func(f"{option.key.rjust(key_width)}. {option.label}")
     output_func("")
 
 
@@ -138,8 +196,8 @@ def build_main_menu_options(
         MenuOption(
             "3",
             "History",
-            lambda: show_placeholder_screen(
-                "History tools are coming in a future v1.1 update.",
+            lambda: run_history_menu(
+                plan_history_service_factory=plan_history_service_factory,
                 input_func=input_func,
                 output_func=output_func,
             ),
@@ -170,7 +228,7 @@ def run_saved_plans_menu(
     try:
         service = plan_history_service_factory()
     except (FileNotFoundError, ValueError) as exc:
-        output_func(f"Error: {exc}")
+        print_error(str(exc), output_func)
         wait_for_enter(input_func)
         return False
     options = [
@@ -211,14 +269,19 @@ def list_saved_plans_action(
     try:
         plans = service.list_plans()
     except ValueError as exc:
-        output_func(f"Error: {exc}")
+        print_error(str(exc), output_func)
     else:
         if not plans:
-            output_func("No saved plans found.")
-        for plan in plans:
-            output_func(f"{plan.id}: {plan.name}")
-            if plan.description:
-                output_func(f"   {plan.description}")
+            print_warning("No saved plans found.", output_func)
+        else:
+            print_table(
+                ["ID", "Name", "Description"],
+                [
+                    [str(plan.id), plan.name, plan.description or ""]
+                    for plan in plans
+                ],
+                output_func,
+            )
 
     wait_for_enter(input_func)
     return False
@@ -234,7 +297,7 @@ def save_current_plan_action(
     output_func("")
     name = input_func("Plan name: ").strip()
     if not name:
-        output_func("Plan name cannot be blank.")
+        print_warning("Plan name cannot be blank.", output_func)
         wait_for_enter(input_func)
         return False
 
@@ -243,7 +306,7 @@ def save_current_plan_action(
         config = config_loader()
         existing = [plan for plan in service.list_plans() if plan.name == name]
     except (FileNotFoundError, ValueError) as exc:
-        output_func(f"Error: {exc}")
+        print_error(str(exc), output_func)
         wait_for_enter(input_func)
         return False
 
@@ -252,7 +315,7 @@ def save_current_plan_action(
             f"A plan named '{name}' already exists. Save a new version? [y/N]: "
         ).strip()
         if confirm.casefold() not in {"y", "yes"}:
-            output_func("Save cancelled.")
+            print_warning("Save cancelled.", output_func)
             wait_for_enter(input_func)
             return False
 
@@ -267,15 +330,196 @@ def save_current_plan_action(
             force=bool(existing),
         )
     except (FileNotFoundError, ValueError) as exc:
-        output_func(f"Error: {exc}")
+        print_error(str(exc), output_func)
     else:
         if result[0] == "created":
-            output_func(f"Created plan {result[1].id}: {result[1].name}")
+            print_success(f"Created plan {result[1].id}: {result[1].name}", output_func)
         else:
-            output_func(f"Saved version {result[1].version_number} for {name}")
+            print_success(
+                f"Saved version {result[1].version_number} for {name}",
+                output_func,
+            )
 
     wait_for_enter(input_func)
     return False
+
+
+def run_history_menu(
+    plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Open plan history tools and return to the main menu when finished."""
+    try:
+        service = plan_history_service_factory()
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    options = [
+        MenuOption(
+            "1",
+            "View Plan History",
+            lambda: view_plan_history_action(service, input_func, output_func),
+        ),
+        MenuOption(
+            "2",
+            "Compare Versions",
+            lambda: compare_versions_action(service, input_func, output_func),
+        ),
+        MenuOption(
+            "3",
+            "Restore Version",
+            lambda: restore_version_action(service, input_func, output_func),
+        ),
+        MenuOption("4", "Back", lambda: True),
+    ]
+
+    run_menu(
+        title="History",
+        options=options,
+        input_func=input_func,
+        output_func=output_func,
+    )
+    return False
+
+
+def view_plan_history_action(
+    service: PlanHistoryService,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Prompt for a plan ID and display saved versions."""
+    output_func("")
+    plan_id = prompt_positive_int("Plan ID: ", input_func, output_func)
+    if plan_id is None:
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        versions = service.list_plan_versions(plan_id)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        print_plan_versions(versions, output_func)
+
+    wait_for_enter(input_func)
+    return False
+
+
+def compare_versions_action(
+    service: PlanHistoryService,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Prompt for two version IDs and display their existing comparison."""
+    output_func("")
+    from_version = prompt_positive_int("Starting version ID: ", input_func, output_func)
+    if from_version is None:
+        wait_for_enter(input_func)
+        return False
+
+    to_version = prompt_positive_int("Ending version ID: ", input_func, output_func)
+    if to_version is None:
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        comparison = service.compare_plan_versions(from_version, to_version)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        print_plan_comparison(comparison, output_func)
+
+    wait_for_enter(input_func)
+    return False
+
+
+def restore_version_action(
+    service: PlanHistoryService,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Prompt for a version ID and restore it after confirmation."""
+    output_func("")
+    version_id = prompt_positive_int("Version ID: ", input_func, output_func)
+    if version_id is None:
+        wait_for_enter(input_func)
+        return False
+
+    confirm = input_func(f"Restore version {version_id} as a new version? [y/N]: ")
+    if confirm.strip().casefold() not in {"y", "yes"}:
+        print_warning("Restore cancelled.", output_func)
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        version = service.restore_plan_version(version_id)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        print_success(
+            f"Restored as version {version.version_number} "
+            f"(version ID {version.id}).",
+            output_func,
+        )
+
+    wait_for_enter(input_func)
+    return False
+
+
+def prompt_positive_int(
+    prompt: str,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> int | None:
+    """Prompt for a positive integer and return None for invalid input."""
+    raw_value = input_func(prompt).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        print_warning("Please enter a positive whole number.", output_func)
+        return None
+
+    if value <= 0:
+        print_warning("Please enter a positive whole number.", output_func)
+        return None
+
+    return value
+
+
+def print_plan_versions(
+    versions,
+    output_func: OutputFunc = print,
+) -> None:
+    """Print saved plan versions in a clear, compact format."""
+    if not versions:
+        print_warning("No saved versions found for that plan.", output_func)
+        return
+
+    print_table(
+        ["ID", "Version", "Created", "Status", "Note"],
+        [
+            [
+                str(version.id),
+                f"v{version.version_number}",
+                version.created_at,
+                "active" if version.active else "",
+                version.change_note or "",
+            ]
+            for version in versions
+        ],
+        output_func,
+    )
+
+
+def print_plan_comparison(
+    comparison,
+    output_func: OutputFunc = print,
+) -> None:
+    """Print the existing plan-comparison result."""
+    output_func(comparison.explanation)
 
 
 def show_placeholder_screen(
@@ -297,7 +541,7 @@ def wait_for_enter(input_func: InputFunc = input) -> None:
 
 def exit_menu(output_func: OutputFunc = print) -> bool:
     """Exit the interactive menu cleanly."""
-    output_func("Goodbye.")
+    print_success("Goodbye.", output_func)
     return True
 
 
@@ -308,8 +552,8 @@ def show_menu_help(
     """Print brief help for the interactive menu before returning."""
     output_func("")
     output_func("Generate Budget Plan: creates the budget plan and Excel workbook.")
-    output_func("Saved Plans: opens saved plan tools when they are available.")
-    output_func("History: opens plan history tools when they are available.")
+    output_func("Saved Plans: lists saved plans or saves the current plan.")
+    output_func("History: views, compares, or restores saved plan versions.")
     output_func("Help: explains the menu options.")
     output_func("Exit: closes DebtSnowball without generating a plan.")
     wait_for_enter(input_func)
@@ -376,15 +620,8 @@ def generate_budget_plan() -> None:
     )
 
     print()
-
-    print("=" * 70)
-    print(f"DebtSnowball v{APP_VERSION}")
-    print("=" * 70)
-
-    print()
-
-    print("Budget plan")
-    print("-" * 70)
+    print_application_banner()
+    print_section_header("Budget Plan")
 
     for summary in summaries:
         print(
@@ -428,7 +665,7 @@ def generate_budget_plan() -> None:
 
         print()
 
-    print(f"Workbook created: {workbook_path}")
+    print_success(f"Workbook created: {workbook_path}")
 
 def build_scenario_comparison(config):
     """Build baseline plus configured scenario forecasts."""
@@ -563,8 +800,9 @@ def run_plan_command(service: PlanHistoryService, args) -> None:
             active = " active" if version.active else ""
             print(f"v{version.version_number}: {version.change_note}{active}")
     elif args.plan_command == "compare":
-        comparison = service.compare_plan_versions(args.from_version, args.to_version)
-        print(comparison.explanation)
+        print_plan_comparison(
+            service.compare_plan_versions(args.from_version, args.to_version)
+        )
     elif args.plan_command == "restore":
         version = service.restore_plan_version(args.version)
         print(f"Restored as version {version.version_number}")
