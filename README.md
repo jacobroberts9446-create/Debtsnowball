@@ -556,7 +556,7 @@ Please avoid combining unrelated refactors, new features, and bug fixes in the s
 
 ## License
 
-MIT License placeholder. A full `LICENSE` file has not been added yet.
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 ---
 
