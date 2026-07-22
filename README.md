@@ -1,12 +1,12 @@
-# 💰 DebtSnowball
+# DebtSnowball
 
 *A Python application for automated paycheck budgeting and debt snowball planning.*
 
 DebtSnowball builds a paycheck-by-paycheck debt payoff plan using a debt snowball strategy. It combines real calendar scheduling, savings goal tracking, debt interest calculations, and Excel reporting into a reproducible workflow driven by `config.json`.
 
-![Python](https://img.shields.io/badge/python-3.14-blue)
+![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
 ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
@@ -43,17 +43,23 @@ Debt tracker placeholder.
 
 ```text
 config.json
-    ↓
+    |
+    v
 Calendar Engine
-    ↓
+    |
+    v
 Scheduler
-    ↓
+    |
+    v
 Budget Engine
-    ↓
+    |
+    v
 Debt Engine
-    ↓
+    |
+    v
 Excel Writer
-    ↓
+    |
+    v
 DebtSnowball Workbook
 ```
 
@@ -340,22 +346,22 @@ The Excel workbook includes:
 
 ```text
 DebtSnowball/
-│
-├── app/
-│   ├── budget_engine.py
-│   ├── calendar_engine.py
-│   ├── config.py
-│   ├── database.py
-│   ├── debt_engine.py
-│   ├── excel_writer.py
-│   ├── models.py
-│   └── scheduler.py
-├── tests/
-├── output/
-├── docs/
-├── config.json
-├── run.py
-└── README.md
+|
+|-- app/
+|   |-- budget_engine.py
+|   |-- calendar_engine.py
+|   |-- config.py
+|   |-- database.py
+|   |-- debt_engine.py
+|   |-- excel_writer.py
+|   |-- models.py
+|   `-- scheduler.py
+|-- tests/
+|-- output/
+|-- docs/
+|-- config.json
+|-- run.py
+`-- README.md
 ```
 
 - `app/`: Application engines, models, configuration loading, database support, and Excel generation.
@@ -528,9 +534,9 @@ Current coverage: **97%**
 
 | Version | Status | Focus |
 | --- | --- | --- |
-| Version 1.0 ✅ | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
-| Version 2 🚧 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, Configurable Scenarios complete, Debt-Free Target Calculator complete, Dated Savings Goals and Planned Withdrawals complete, and Deadline-Aware Savings Priority in development. |
-| Version 3 🔮 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
+| Version 1.0 | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
+| Version 2 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, Configurable Scenarios complete, Debt-Free Target Calculator complete, Dated Savings Goals and Planned Withdrawals complete, and Deadline-Aware Savings Priority in development. |
+| Version 3 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
 
 ---
 
