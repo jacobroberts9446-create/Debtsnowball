@@ -409,10 +409,43 @@ Project money rules:
 - `Decimal("-0.00")` is normalized to `Decimal("0.00")`.
 - A remaining debt balance of exactly `$0.01` is treated as paid; `$0.02` is not forgiven.
 - Excel receives numeric values only at the writer boundary through `excel_number()`.
-- SQLite currently stores money in the existing `REAL` columns for compatibility. Values are normalized back to two-decimal `Decimal` immediately after loading.
+- SQLite stores monetary values as integer cents through `to_cents()` and `from_cents()`.
 
-The SQLite `REAL` storage format is a known Phase 2 limitation. A future Phase 3
-migration should move persisted money to integer cents or fixed-point text.
+SQLite schema versioning uses `PRAGMA user_version`.
+
+| Version | Meaning |
+| --- | --- |
+| `0` or `1` | Legacy schema with money stored as SQLite `REAL`. |
+| `2` | Current schema with money stored as SQLite `INTEGER` cents. |
+
+When a legacy database is opened, DebtSnowball creates a timestamped backup next
+to the original database before running the schema migration. Backups use a name
+like `debtsnowball.sqlite.v1-real-money.20260722153000.bak`. In-memory databases
+are not backed up.
+
+Legacy money is converted with the same application policy used everywhere else:
+values are parsed through Decimal, rounded to cents with `ROUND_HALF_UP`, then
+stored as integer cents. For example:
+
+| Money | SQLite cents |
+| --- | ---: |
+| `$0.01` | `1` |
+| `$215.00` | `21500` |
+| `$568.50` | `56850` |
+| `$2,400.00` | `240000` |
+
+The maximum supported SQLite money value is bounded by SQLite's signed 64-bit
+integer range for cents. Values outside that range raise an error instead of
+being stored.
+
+Developer rules for future database work:
+
+- Never write `Decimal` money to SQLite as `REAL`.
+- Always use `to_cents()` when writing monetary values.
+- Always use `from_cents()` when reading monetary values.
+- Keep percentages and rates, such as APR, separate from money storage.
+- Future schema changes should add a new `PRAGMA user_version` migration.
+- If a migration fails, keep the `.bak` file, fix the source data or schema, and rerun the application.
 
 ---
 

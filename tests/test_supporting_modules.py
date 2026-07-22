@@ -123,7 +123,7 @@ def test_database_saves_paychecks_and_debts(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM debts").fetchone()[0] == 1
 
 
-def test_database_real_boundary_reloads_money_as_normalized_decimal(tmp_path):
+def test_database_integer_cent_boundary_reloads_money_as_normalized_decimal(tmp_path):
     db_path = tmp_path / "plan.sqlite"
     paychecks = [
         SimpleNamespace(

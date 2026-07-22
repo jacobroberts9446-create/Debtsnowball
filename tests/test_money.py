@@ -11,8 +11,10 @@ from app.money import (
     ZERO_MONEY,
     excel_number,
     format_currency,
+    from_cents,
     money,
     round_money,
+    to_cents,
     to_decimal,
 )
 
@@ -57,6 +59,55 @@ def test_format_currency_normalizes_reported_money():
     assert format_currency(Decimal("-0.00")) == "$0.00"
     assert format_currency(Decimal("215")) == "$215.00"
     assert format_currency(Decimal("568.5")) == "$568.50"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, 0),
+        (Decimal("-0.00"), 0),
+        (Decimal("0.01"), 1),
+        (Decimal("0.02"), 2),
+        (Decimal("215.00"), 21500),
+        (Decimal("568.50"), 56850),
+        (Decimal("-12.34"), -1234),
+        (Decimal("999999999999.99"), 99999999999999),
+        ("1.005", 101),
+    ],
+)
+def test_to_cents_converts_money_without_float_math(value, expected):
+    assert to_cents(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, Decimal("0.00")),
+        ("0", Decimal("0.00")),
+        (1, Decimal("0.01")),
+        (2, Decimal("0.02")),
+        (21500, Decimal("215.00")),
+        (56850, Decimal("568.50")),
+        (-1234, Decimal("-12.34")),
+        (99999999999999, Decimal("999999999999.99")),
+    ],
+)
+def test_from_cents_converts_integer_storage_to_money(value, expected):
+    assert from_cents(value) == expected
+
+
+@pytest.mark.parametrize("value", ["bad", "21500.5", None, True, 21500.5])
+def test_from_cents_rejects_invalid_cent_storage(value):
+    with pytest.raises(ValueError):
+        from_cents(value)
+
+
+def test_cent_storage_rejects_sqlite_integer_overflow():
+    with pytest.raises(OverflowError):
+        to_cents(Decimal("92233720368547758.08"))
+
+    with pytest.raises(OverflowError):
+        from_cents(9223372036854775808)
 
 
 @pytest.mark.parametrize(
