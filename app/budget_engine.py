@@ -6,6 +6,7 @@ for each pay period.
 """
 
 from dataclasses import dataclass
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal, ROUND_CEILING
 
@@ -67,6 +68,9 @@ class PayPeriodSummary:
     snowball_reduction: Decimal = ZERO_MONEY
     personal_expense_reduction: Decimal = ZERO_MONEY
     projected_savings_shortfall: Decimal = ZERO_MONEY
+    debt_interest_by_name: dict[str, Decimal] | None = None
+    debt_minimums_by_name: dict[str, Decimal] | None = None
+    debt_snowball_by_name: dict[str, Decimal] | None = None
 
 
 @dataclass
@@ -95,7 +99,7 @@ class BudgetEngine:
         self.config = config
         self.settings = config.settings
         self.scheduler = Scheduler(config)
-        self.debt_engine = DebtEngine(config.debts)
+        self.debt_engine = DebtEngine(deepcopy(config.debts))
         self.savings_balance = money(self.settings.starting_savings)
         self.extra_snowball_per_paycheck = money(extra_snowball_per_paycheck)
         self.savings_percentage_override = savings_percentage_override
@@ -193,6 +197,15 @@ class BudgetEngine:
             snowball_reduction=allocation.snowball_reduction,
             personal_expense_reduction=allocation.personal_expense_reduction,
             projected_savings_shortfall=allocation.projected_shortfall,
+            debt_interest_by_name={
+                name: money(amount) for name, amount in debt_result["interest"].items()
+            },
+            debt_minimums_by_name={
+                name: money(amount) for name, amount in debt_result["minimums"].items()
+            },
+            debt_snowball_by_name={
+                name: money(amount) for name, amount in debt_result["snowball"].items()
+            },
         )
 
     def _scheduled_bill_total(self, scheduled_payments) -> Decimal:
@@ -234,8 +247,11 @@ class BudgetEngine:
     def _debt_minimum_after_interest(self, debt_name: str) -> Decimal:
         """Return the expected minimum payment after this period's interest."""
         debt = next(
-            debt for debt in self.debt_engine.debts if debt.name == debt_name
+            (debt for debt in self.debt_engine.debts if debt.name == debt_name),
+            None,
         )
+        if debt is None:
+            return ZERO_MONEY
         balance_after_interest = debt.balance + (debt.balance * debt.rate_per_paycheck)
         return money(min(debt.minimum, balance_after_interest))
 

@@ -137,6 +137,10 @@ def build_parser():
     plan_compare.add_argument("--to-version", type=int, required=True)
     plan_restore = plan_sub.add_parser("restore", help="Restore a version as a new version")
     plan_restore.add_argument("--version", type=int, required=True)
+    plan_delete = plan_sub.add_parser("delete", help="Permanently delete an archived plan")
+    plan_delete.add_argument("--plan-id", type=int, required=True)
+    plan_delete.add_argument("--confirm-name", required=True)
+    plan_delete.add_argument("--export-path")
 
     actual = subparsers.add_parser("actual", help="Record actual local activity")
     actual_sub = actual.add_subparsers(dest="actual_command", required=True)
@@ -152,14 +156,33 @@ def build_parser():
         type=int,
         required=True,
     )
+    actual_balance = actual_sub.add_parser("balance", help="Record an actual balance observation")
+    actual_balance.add_argument("--plan-id", type=int, required=True)
+    actual_balance.add_argument("--date", required=True)
+    actual_balance.add_argument(
+        "--type",
+        choices=[
+            ActualEntryType.DEBT_BALANCE_OBSERVATION.value,
+            ActualEntryType.SAVINGS_BALANCE_OBSERVATION.value,
+        ],
+        required=True,
+    )
+    actual_balance.add_argument("--balance", required=True)
+    actual_balance.add_argument("--debt")
+    actual_balance.add_argument("--note", default="")
 
     export_cmd = subparsers.add_parser("export", help="Export a saved plan")
     export_cmd.add_argument("--plan-id", type=int, required=True)
     export_cmd.add_argument("--path", required=True)
+    export_cmd.add_argument("--format", choices=["json", "csv"], default="json")
 
     import_cmd = subparsers.add_parser("import", help="Import a saved plan")
     import_cmd.add_argument("--path", required=True)
     import_cmd.add_argument("--name")
+
+    report_cmd = subparsers.add_parser("history-report", help="Create a saved history workbook")
+    report_cmd.add_argument("--plan-id", type=int, required=True)
+    report_cmd.add_argument("--path", required=True)
     return parser
 
 
@@ -172,11 +195,17 @@ def run_cli(args) -> None:
         elif args.command == "actual":
             run_actual_command(service, args)
         elif args.command == "export":
-            path = service.export_plan_json(args.plan_id, args.path)
-            print(f"Exported plan to {path}")
+            if args.format == "csv":
+                paths = service.export_csv_bundle(args.plan_id, args.path)
+                print(f"Exported {len(paths)} CSV files to {args.path}")
+            else:
+                path = service.export_plan_json(args.plan_id, args.path)
+                print(f"Exported plan to {path}")
         elif args.command == "import":
             plan = service.import_plan_json(args.path, new_name=args.name)
             print(f"Imported plan {plan.id}: {plan.name}")
+        elif args.command == "history-report":
+            write_history_report(service, args.plan_id, args.path)
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}")
 
@@ -217,6 +246,13 @@ def run_plan_command(service: PlanHistoryService, args) -> None:
     elif args.plan_command == "restore":
         version = service.restore_plan_version(args.version)
         print(f"Restored as version {version.version_number}")
+    elif args.plan_command == "delete":
+        service.delete_plan_permanently(
+            args.plan_id,
+            confirmation_name=args.confirm_name,
+            export_path=args.export_path,
+        )
+        print(f"Deleted archived plan {args.plan_id}")
 
 
 def run_actual_command(service: PlanHistoryService, args) -> None:
@@ -235,6 +271,34 @@ def run_actual_command(service: PlanHistoryService, args) -> None:
     elif args.actual_command == "summary":
         summary = service.compare_forecast_to_actual(args.plan_id)
         print(summary.status)
+    elif args.actual_command == "balance":
+        observation = service.add_balance_observation(
+            args.plan_id,
+            date.fromisoformat(args.date),
+            ActualEntryType(args.type),
+            args.balance,
+            debt_identifier=args.debt,
+            note=args.note,
+            source="cli",
+        )
+        print(f"Added balance observation {observation.id}")
+
+
+def write_history_report(service: PlanHistoryService, plan_id: int, path: str) -> None:
+    """Write a detailed local history workbook for a saved plan."""
+    plan = service.get_plan(plan_id)
+    details = service.history_report_rows(plan_id)
+    workbook_path = ExcelWriter(path).write_history_report(
+        plan,
+        service.list_plan_versions(plan_id),
+        actual_comparison=service.compare_forecast_to_actual(plan_id),
+        forecast_snapshots=details["forecast_snapshots"],
+        actual_periods=service.compare_forecast_to_actual_periods(plan_id),
+        debt_history=details["debt_history"],
+        savings_history=details["savings_history"],
+        warnings=details["warnings"],
+    )
+    print(f"History report created: {workbook_path}")
 
 
 if __name__ == "__main__":

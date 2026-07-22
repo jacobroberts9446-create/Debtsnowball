@@ -503,6 +503,8 @@ class ActualEntryType(StrEnum):
     SAVINGS_WITHDRAWAL = "savings_withdrawal"
     PERSONAL_SPENDING = "personal_spending"
     ADJUSTMENT = "adjustment"
+    DEBT_BALANCE_OBSERVATION = "debt_balance_observation"
+    SAVINGS_BALANCE_OBSERVATION = "savings_balance_observation"
 
 
 class AllocationReasonCode(StrEnum):
@@ -649,3 +651,63 @@ class ForecastActualComparison:
     planned_remaining_cash: Decimal
     actual_remaining_cash: Decimal
     status: str
+
+
+@dataclass(frozen=True)
+class ForecastActualPeriodComparison:
+    """Planned-versus-actual comparison for one forecast period."""
+
+    forecast_period_id: int
+    pay_date: date
+    planned_income: Decimal
+    actual_income: Decimal | None
+    income_variance: Decimal | None
+    planned_bills: Decimal
+    actual_bills: Decimal | None
+    bills_variance: Decimal | None
+    planned_debt_minimums: Decimal
+    actual_debt_payments: Decimal | None
+    debt_payment_variance: Decimal | None
+    planned_snowball: Decimal
+    actual_extra_debt_payment: Decimal | None
+    planned_savings_deposit: Decimal
+    actual_savings_deposit: Decimal | None
+    planned_savings_withdrawal: Decimal
+    actual_savings_withdrawal: Decimal | None
+    planned_personal_spending: Decimal
+    actual_personal_spending: Decimal | None
+    planned_remaining_cash: Decimal
+    actual_remaining_cash: Decimal | None
+    debt_balance_variance: Decimal | None
+    savings_balance_variance: Decimal | None
+    data_completeness: str
+    status: str
+    interpretation: str
+
+
+@dataclass(frozen=True)
+class BalanceObservation:
+    """Observed actual debt or savings balance."""
+
+    id: int
+    plan_id: int
+    observation_date: date
+    observation_type: ActualEntryType
+    balance: Decimal
+    source: str
+    debt_identifier: str | None = None
+    note: str = ""
+    forecast_period_id: int | None = None
+    match_method: str = "unmatched"
+
+
+@dataclass(frozen=True)
+class AssumptionDifference:
+    """One input assumption difference between saved versions."""
+
+    category: str
+    name: str
+    earlier_value: object
+    later_value: object
+    direction: str
+    interpretation: str

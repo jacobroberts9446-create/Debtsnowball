@@ -14,7 +14,8 @@ from typing import Any, NamedTuple
 
 from app.money import from_cents, money, to_cents
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
+HISTORY_SCHEMA_VERSION = 3
 INTEGER_CENT_SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSIONS = {0, 1}
 
@@ -144,6 +145,11 @@ class Database:
             if version == INTEGER_CENT_SCHEMA_VERSION:
                 self._backup_before_migration("v2-integer-cents")
                 self._migrate_v2_to_v3(conn)
+                self._migrate_v3_to_v4(conn)
+                return
+            if version == HISTORY_SCHEMA_VERSION:
+                self._backup_before_migration("v3-history")
+                self._migrate_v3_to_v4(conn)
                 return
             if version not in LEGACY_SCHEMA_VERSIONS:
                 raise DatabaseMigrationError(f"Cannot migrate SQLite schema version {version}.")
@@ -306,11 +312,25 @@ class Database:
         }
         return bool(table_names)
 
+    def _table_exists(self, conn: sqlite3.Connection, table: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+            """,
+            (table,),
+        ).fetchone()
+        return row is not None
+
     def _ensure_current_schema_exists(self, conn: sqlite3.Connection) -> None:
         if not self._has_application_tables(conn):
             with conn:
                 self._create_current_schema(conn)
             return
+        if self._table_exists(conn, "plan_versions"):
+            with conn:
+                self._create_history_integrity_triggers(conn)
         self._validate_current_schema(conn)
 
     def _create_current_schema(self, conn: sqlite3.Connection) -> None:
@@ -366,13 +386,28 @@ class Database:
         try:
             conn.execute("BEGIN IMMEDIATE")
             self._validate_current_money_schema(conn)
-            self._create_history_schema(conn)
+            self._create_history_schema(conn, include_detail=False)
+            self._validate_history_schema(conn, include_detail=False)
+            self._set_schema_version(conn, HISTORY_SCHEMA_VERSION)
+            conn.commit()
+        except (sqlite3.Error, ValueError) as exc:
+            conn.rollback()
+            raise DatabaseMigrationError(f"SQLite history migration failed: {exc}") from exc
+
+    def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
+        """Add detailed history fields and balance observations."""
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._create_history_detail_schema(conn)
+            self._create_history_integrity_triggers(conn)
             self._validate_history_schema(conn)
             self._set_schema_version(conn, LATEST_SCHEMA_VERSION)
             conn.commit()
         except (sqlite3.Error, ValueError) as exc:
             conn.rollback()
-            raise DatabaseMigrationError(f"SQLite history migration failed: {exc}") from exc
+            raise DatabaseMigrationError(
+                f"SQLite detailed history migration failed: {exc}"
+            ) from exc
 
     def _migrate_legacy_real_money_schema(self, conn: sqlite3.Connection) -> None:
         """Migrate legacy REAL money columns to INTEGER cents transactionally."""
@@ -617,7 +652,12 @@ class Database:
                 if table_info.get(column) != "INTEGER":
                     raise ValueError(f"{table}.{column} must use INTEGER cent storage.")
 
-    def _create_history_schema(self, conn: sqlite3.Connection) -> None:
+    def _create_history_schema(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        include_detail: bool = True,
+    ) -> None:
         """Create version-3 local plan history and snapshot tables."""
         conn.execute(
             """
@@ -803,8 +843,147 @@ class Database:
             ON actual_transactions (plan_id, entry_date)
             """
         )
+        if include_detail:
+            self._create_history_detail_schema(conn)
+            self._create_history_integrity_triggers(conn)
 
-    def _validate_history_schema(self, conn: sqlite3.Connection) -> None:
+    def _create_history_detail_schema(self, conn: sqlite3.Connection) -> None:
+        """Create version-4 detailed history columns and tables."""
+        for statement in (
+            "ALTER TABLE debt_snapshots ADD COLUMN payoff_order INTEGER",
+            "ALTER TABLE debt_snapshots ADD COLUMN scheduled_minimum_payment INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE debt_snapshots ADD COLUMN actual_minimum_payment INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE debt_snapshots ADD COLUMN apr TEXT NOT NULL DEFAULT '0'",
+            "ALTER TABLE debt_snapshots ADD COLUMN final_payoff_tolerance_applied INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE debt_snapshots ADD COLUMN allocation_reason_code TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE debt_snapshots ADD COLUMN explanation TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE savings_snapshots ADD COLUMN total_deposit INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE savings_snapshots ADD COLUMN amount_required_before INTEGER",
+            "ALTER TABLE savings_snapshots ADD COLUMN amount_required_after INTEGER",
+            "ALTER TABLE savings_snapshots ADD COLUMN projected_deadline_balance INTEGER",
+            "ALTER TABLE savings_snapshots ADD COLUMN withdrawal_date TEXT",
+            "ALTER TABLE savings_snapshots ADD COLUMN withdrawal_amount INTEGER",
+            "ALTER TABLE savings_snapshots ADD COLUMN post_withdrawal_allocation_state TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE savings_snapshots ADD COLUMN reason_codes TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE savings_snapshots ADD COLUMN explanation TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE actual_transactions ADD COLUMN forecast_period_id INTEGER",
+            "ALTER TABLE actual_transactions ADD COLUMN match_method TEXT NOT NULL DEFAULT 'unmatched'",
+            "ALTER TABLE actual_transactions ADD COLUMN matched_at TEXT",
+            "ALTER TABLE actual_transactions ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0",
+        ):
+            self._try_add_column(conn, statement)
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS balance_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                observation_date TEXT NOT NULL,
+                observation_type TEXT NOT NULL,
+                debt_identifier TEXT,
+                balance INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                forecast_period_id INTEGER,
+                match_method TEXT NOT NULL DEFAULT 'unmatched',
+                FOREIGN KEY (plan_id) REFERENCES plans(id),
+                FOREIGN KEY (forecast_period_id) REFERENCES forecast_periods(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_balance_observations_plan_date
+            ON balance_observations (plan_id, observation_date)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_quality_warnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forecast_snapshot_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT NOT NULL,
+                relevant_date TEXT,
+                relevant_name TEXT,
+                suggested_action TEXT,
+                FOREIGN KEY (forecast_snapshot_id) REFERENCES forecast_snapshots(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_data_quality_warnings_snapshot
+            ON data_quality_warnings (forecast_snapshot_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS imported_plan_fingerprints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                import_fingerprint TEXT NOT NULL UNIQUE,
+                imported_at TEXT NOT NULL,
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_debt_snapshots_period_order
+            ON debt_snapshots (forecast_period_id, payoff_order)
+            """
+        )
+
+    def _create_history_integrity_triggers(self, conn: sqlite3.Connection) -> None:
+        """Create guarded triggers that protect immutable plan versions."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plan_version_mutation_guard (
+                id INTEGER PRIMARY KEY CHECK (id = 1)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS prevent_plan_version_update
+            BEFORE UPDATE ON plan_versions
+            WHEN NOT EXISTS (
+                SELECT 1 FROM plan_version_mutation_guard WHERE id = 1
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'plan_versions are immutable');
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS prevent_plan_version_delete
+            BEFORE DELETE ON plan_versions
+            WHEN NOT EXISTS (
+                SELECT 1 FROM plan_version_mutation_guard WHERE id = 1
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'plan_versions are immutable');
+            END
+            """
+        )
+
+    def _try_add_column(self, conn: sqlite3.Connection, statement: str) -> None:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+    def _validate_history_schema(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        include_detail: bool = True,
+    ) -> None:
         required_tables = {
             "plans",
             "plan_versions",
@@ -814,6 +993,13 @@ class Database:
             "savings_snapshots",
             "actual_transactions",
         }
+        if include_detail:
+            required_tables |= {
+                "balance_observations",
+                "data_quality_warnings",
+                "imported_plan_fingerprints",
+                "plan_version_mutation_guard",
+            }
         existing = {
             row[0]
             for row in conn.execute(
@@ -829,6 +1015,26 @@ class Database:
             raise ValueError(
                 f"history schema is missing table(s): {', '.join(sorted(missing))}."
             )
+        if include_detail:
+            trigger_names = {
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'trigger'
+                    """
+                )
+            }
+            missing_triggers = {
+                "prevent_plan_version_update",
+                "prevent_plan_version_delete",
+            } - trigger_names
+            if missing_triggers:
+                raise ValueError(
+                    "history schema is missing trigger(s): "
+                    f"{', '.join(sorted(missing_triggers))}."
+                )
 
     def _cleanup_migration_tables(self, conn: sqlite3.Connection) -> None:
         """Remove temporary migration tables after a failed migration attempt."""

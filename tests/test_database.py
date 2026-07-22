@@ -125,6 +125,49 @@ def create_legacy_database(db_path, *, duplicate_debt_names=False, nullable_inco
         conn.commit()
 
 
+def create_version_2_database(db_path):
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA user_version = 2")
+        conn.execute(
+            """
+            CREATE TABLE paychecks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pay_date TEXT NOT NULL UNIQUE,
+                income INTEGER NOT NULL,
+                bills_paid INTEGER NOT NULL,
+                debt_minimums INTEGER NOT NULL,
+                snowball_payment INTEGER NOT NULL,
+                savings_added INTEGER NOT NULL,
+                checking_remaining INTEGER NOT NULL,
+                notes TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE debts (
+                name TEXT PRIMARY KEY,
+                balance INTEGER NOT NULL,
+                apr REAL NOT NULL,
+                minimum_payment INTEGER NOT NULL,
+                total_paid INTEGER NOT NULL,
+                total_interest_paid INTEGER NOT NULL,
+                status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paychecks (pay_date, income, bills_paid, debt_minimums,
+                                   snowball_payment, savings_added,
+                                   checking_remaining, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-07-17", 223400, 76600, 103800, 21500, 21500, 0, "v2"),
+        )
+        conn.commit()
+
+
 def table_column_types(conn, table):
     return {row[1]: row[2].upper() for row in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -303,46 +346,7 @@ def test_legacy_real_database_migrates_to_integer_cents_with_backup(tmp_path):
 
 def test_version_2_database_migrates_to_version_3_history_schema_with_backup(tmp_path):
     db_path = tmp_path / "v2.sqlite"
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("PRAGMA user_version = 2")
-        conn.execute(
-            """
-            CREATE TABLE paychecks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pay_date TEXT NOT NULL UNIQUE,
-                income INTEGER NOT NULL,
-                bills_paid INTEGER NOT NULL,
-                debt_minimums INTEGER NOT NULL,
-                snowball_payment INTEGER NOT NULL,
-                savings_added INTEGER NOT NULL,
-                checking_remaining INTEGER NOT NULL,
-                notes TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE debts (
-                name TEXT PRIMARY KEY,
-                balance INTEGER NOT NULL,
-                apr REAL NOT NULL,
-                minimum_payment INTEGER NOT NULL,
-                total_paid INTEGER NOT NULL,
-                total_interest_paid INTEGER NOT NULL,
-                status TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO paychecks (pay_date, income, bills_paid, debt_minimums,
-                                   snowball_payment, savings_added,
-                                   checking_remaining, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("2026-07-17", 223400, 76600, 103800, 21500, 21500, 0, "v2"),
-        )
-        conn.commit()
+    create_version_2_database(db_path)
 
     database = Database(db_path)
     database.initialize()
@@ -358,6 +362,51 @@ def test_version_2_database_migrates_to_version_3_history_schema_with_backup(tmp
             21500,
         )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v2_to_v3_failure_leaves_database_at_version_2(tmp_path, monkeypatch):
+    db_path = tmp_path / "v2_fail.sqlite"
+    create_version_2_database(db_path)
+
+    def fail_history_schema(self, conn, *, include_detail=True):
+        raise ValueError("injected v3 failure")
+
+    monkeypatch.setattr(Database, "_create_history_schema", fail_history_schema)
+
+    with pytest.raises(DatabaseMigrationError, match="injected v3 failure"):
+        Database(db_path).initialize()
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert schema_version(conn) == 2
+        assert "plans" not in table_names(conn)
+
+
+def test_v3_to_v4_failure_leaves_database_at_version_3_and_can_resume(tmp_path, monkeypatch):
+    db_path = tmp_path / "v3_resume.sqlite"
+    create_version_2_database(db_path)
+    calls = {"count": 0}
+    original = Database._migrate_v3_to_v4
+
+    def fail_once(self, conn):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise DatabaseMigrationError("injected v4 failure")
+        return original(self, conn)
+
+    monkeypatch.setattr(Database, "_migrate_v3_to_v4", fail_once)
+    with pytest.raises(DatabaseMigrationError, match="injected v4 failure"):
+        Database(db_path).initialize()
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert schema_version(conn) == 3
+        assert "plans" in table_names(conn)
+        assert "balance_observations" not in table_names(conn)
+
+    Database(db_path).initialize()
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert schema_version(conn) == LATEST_SCHEMA_VERSION
+        assert "balance_observations" in table_names(conn)
+        assert "plan_version_mutation_guard" in table_names(conn)
 
 
 def test_current_version_database_initialization_is_idempotent(tmp_path):

@@ -4,6 +4,8 @@ excel_writer.py
 Writes budget summaries to an Excel workbook.
 """
 
+from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -15,7 +17,9 @@ from openpyxl.worksheet.worksheet import Worksheet
 from app.budget_engine import PayPeriodSummary
 from app.money import ZERO_MONEY, excel_number, money
 from app.models import (
+    AssumptionDifference,
     ForecastActualComparison,
+    ForecastActualPeriodComparison,
     DebtFreeTargetResult,
     DebtFreeTargetStatus,
     ForecastSummary,
@@ -84,19 +88,50 @@ class ExcelWriter:
         versions: list[PlanVersion],
         comparison: PlanComparison | None = None,
         actual_comparison: ForecastActualComparison | None = None,
+        forecast_snapshots: list[dict[str, object]] | None = None,
+        actual_periods: list[ForecastActualPeriodComparison] | None = None,
+        debt_history: list[dict[str, object]] | None = None,
+        savings_history: list[dict[str, object]] | None = None,
+        warnings: list[dict[str, object]] | None = None,
+        assumption_differences: list[AssumptionDifference] | None = None,
     ) -> Path:
         """Write optional saved-history sheets when history data is requested."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         workbook = Workbook()
         history_sheet = workbook.active
         history_sheet.title = "Plan History"
-        self._write_plan_history(history_sheet, plan, versions)
+        self._write_plan_history(history_sheet, plan, versions, forecast_snapshots)
         if comparison is not None:
             self._write_plan_comparison(workbook.create_sheet("Plan Comparison"), comparison)
         if actual_comparison is not None:
             self._write_forecast_actual(
                 workbook.create_sheet("Forecast vs Actual"),
                 actual_comparison,
+            )
+        if actual_periods is not None:
+            self._write_history_dict_sheet(
+                workbook.create_sheet("Period Details"),
+                [asdict(row) for row in actual_periods],
+            )
+        if debt_history is not None:
+            self._write_history_dict_sheet(
+                workbook.create_sheet("Debt History"),
+                debt_history,
+            )
+        if savings_history is not None:
+            self._write_history_dict_sheet(
+                workbook.create_sheet("Savings History"),
+                savings_history,
+            )
+        if warnings is not None:
+            self._write_history_dict_sheet(
+                workbook.create_sheet("History Warnings"),
+                warnings,
+            )
+        if assumption_differences is not None:
+            self._write_history_dict_sheet(
+                workbook.create_sheet("Assumption Changes"),
+                [asdict(row) for row in assumption_differences],
             )
         workbook.save(self.path)
         return self.path
@@ -106,9 +141,14 @@ class ExcelWriter:
         sheet: Worksheet,
         plan: Plan,
         versions: list[PlanVersion],
+        forecast_snapshots: list[dict[str, object]] | None = None,
     ) -> None:
         sheet["A1"] = f"Plan History: {plan.name}"
         sheet["A1"].font = Font(bold=True, size=14)
+        snapshots_by_version = {
+            int(snapshot["plan_version_id"]): snapshot
+            for snapshot in forecast_snapshots or []
+        }
         self._append_row(
             sheet,
             [
@@ -116,12 +156,19 @@ class ExcelWriter:
                 "Created Date",
                 "Change Note",
                 "Configuration Fingerprint",
+                "Forecast Fingerprint",
+                "Debt-Free Date",
+                "Total Projected Interest",
+                "Starting Debt",
+                "Ending Savings",
+                "Warning Count",
                 "Active",
                 "Application Version",
                 "Engine Version",
             ],
         )
         for version in versions:
+            snapshot = snapshots_by_version.get(version.id, {})
             self._append_row(
                 sheet,
                 [
@@ -129,12 +176,18 @@ class ExcelWriter:
                     version.created_at,
                     version.change_note,
                     version.config_fingerprint,
+                    snapshot.get("forecast_fingerprint"),
+                    self._date_cell(snapshot.get("debt_free_date")),
+                    self._money_cell(snapshot.get("total_projected_interest")),
+                    self._money_cell(snapshot.get("starting_debt")),
+                    self._money_cell(snapshot.get("ending_savings")),
+                    snapshot.get("warning_count"),
                     self._yes_no(version.active),
                     version.application_version,
                     version.forecast_engine_version,
                 ],
             )
-        self._format_table(sheet, header_row=2)
+        self._format_table(sheet, currency_columns=[7, 8, 9], date_columns=[2, 6], header_row=2)
 
     def _write_plan_comparison(
         self,
@@ -195,6 +248,56 @@ class ExcelWriter:
                 [metric, planned, actual, money(actual - planned), comparison.status],
             )
         self._format_table(sheet, currency_columns=[2, 3, 4], header_row=2)
+
+    def _write_history_dict_sheet(
+        self,
+        sheet: Worksheet,
+        rows: list[dict[str, object]],
+    ) -> None:
+        """Write a simple formatted sheet from persisted history rows."""
+        if not rows:
+            self._append_row(sheet, ["Status"])
+            self._append_row(sheet, ["No rows available"])
+            self._format_table(sheet, header_row=1)
+            return
+
+        headers = list(rows[0])
+        self._append_row(sheet, headers)
+        for row in rows:
+            self._append_row(sheet, [row.get(header) for header in headers])
+        currency_columns = [
+            index
+            for index, header in enumerate(headers, start=1)
+            if any(
+                marker in header
+                for marker in (
+                    "amount",
+                    "balance",
+                    "payment",
+                    "interest",
+                    "income",
+                    "expense",
+                    "savings",
+                    "snowball",
+                    "principal",
+                    "withdrawal",
+                    "cash",
+                    "variance",
+                    "contribution",
+                    "debt",
+                )
+            )
+        ]
+        date_columns = [
+            index
+            for index, header in enumerate(headers, start=1)
+            if "date" in header or header in {"pay_date", "created_at", "matched_at"}
+        ]
+        self._format_table(
+            sheet,
+            currency_columns=currency_columns,
+            date_columns=date_columns,
+        )
 
     def _write_pay_period_summaries(
         self,
@@ -1736,6 +1839,16 @@ class ExcelWriter:
             return excel_number(value)
 
         return value
+
+    def _money_cell(self, value: object) -> object:
+        if value is None:
+            return None
+        return excel_number(money(value))
+
+    def _date_cell(self, value: object) -> object:
+        if value is None or hasattr(value, "year"):
+            return value
+        return date.fromisoformat(str(value))
 
     def _yes_no(self, value: bool | None) -> str | None:
         if value is None:
