@@ -7,6 +7,7 @@ DebtSnowball
 import argparse
 from copy import deepcopy
 from datetime import date
+from typing import Callable
 
 from app.budget_engine import BudgetEngine
 from app.calendar_engine import CalendarEngine
@@ -19,14 +20,62 @@ from app.money import format_currency
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
+APP_VERSION = "1.1.0"
 
-def main():
+
+def main(argv: list[str] | None = None) -> None:
+    """Run either the existing argparse CLI or the interactive main menu."""
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command:
         run_cli(args)
         return
 
+    run_main_menu()
+
+
+def run_main_menu(
+    generate_budget_plan_func: Callable[[], None] | None = None,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> None:
+    """Show the interactive menu for normal no-argument runs."""
+    generate_budget_plan_func = generate_budget_plan_func or generate_budget_plan
+
+    while True:
+        output_func("")
+        output_func(f"DebtSnowball v{APP_VERSION}")
+        output_func("")
+        output_func("1. Generate Budget Plan")
+        output_func("2. Help")
+        output_func("3. Exit")
+        output_func("")
+
+        choice = input_func("Choose an option: ").strip()
+
+        if choice == "1":
+            generate_budget_plan_func()
+            return
+        if choice == "2":
+            show_menu_help(output_func)
+            continue
+        if choice == "3":
+            output_func("Goodbye.")
+            return
+
+        output_func("Please choose 1, 2, or 3.")
+
+
+def show_menu_help(output_func: Callable[[str], None] = print) -> None:
+    """Print brief help for the interactive menu."""
+    output_func("")
+    output_func("Generate Budget Plan: creates the budget plan and Excel workbook.")
+    output_func("Help: explains the menu options.")
+    output_func("Exit: closes DebtSnowball without generating a plan.")
+
+
+def generate_budget_plan() -> None:
+    """Run the existing default budget-generation workflow."""
     config = Config()
     config.load()
 
@@ -50,7 +99,7 @@ def main():
     print()
 
     print("=" * 70)
-    print("DebtSnowball v1.0.0")
+    print(f"DebtSnowball v{APP_VERSION}")
     print("=" * 70)
 
     print()
