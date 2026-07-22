@@ -14,7 +14,8 @@ from typing import Any, NamedTuple
 
 from app.money import from_cents, money, to_cents
 
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
+INTEGER_CENT_SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSIONS = {0, 1}
 
 
@@ -139,6 +140,10 @@ class Database:
                 with conn:
                     self._create_current_schema(conn)
                     self._set_schema_version(conn, LATEST_SCHEMA_VERSION)
+                return
+            if version == INTEGER_CENT_SCHEMA_VERSION:
+                self._backup_before_migration("v2-integer-cents")
+                self._migrate_v2_to_v3(conn)
                 return
             if version not in LEGACY_SCHEMA_VERSIONS:
                 raise DatabaseMigrationError(f"Cannot migrate SQLite schema version {version}.")
@@ -337,23 +342,37 @@ class Database:
             )
             """
         )
+        self._create_history_schema(conn)
 
-    def _backup_before_migration(self) -> None:
+    def _backup_before_migration(self, label: str = "v1-real-money") -> None:
         """Create a timestamped backup before changing a file-backed database."""
         self.last_backup_path = None
         if self._is_memory_database() or not self.path.exists():
             return
 
         timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-        backup_path = self.path.with_name(f"{self.path.name}.v1-real-money.{timestamp}.bak")
+        backup_path = self.path.with_name(f"{self.path.name}.{label}.{timestamp}.bak")
         suffix = 1
         while backup_path.exists():
             backup_path = self.path.with_name(
-                f"{self.path.name}.v1-real-money.{timestamp}.{suffix}.bak"
+                f"{self.path.name}.{label}.{timestamp}.{suffix}.bak"
             )
             suffix += 1
         shutil.copy2(self.path, backup_path)
         self.last_backup_path = backup_path
+
+    def _migrate_v2_to_v3(self, conn: sqlite3.Connection) -> None:
+        """Add durable history tables to an existing integer-cent database."""
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_current_money_schema(conn)
+            self._create_history_schema(conn)
+            self._validate_history_schema(conn)
+            self._set_schema_version(conn, LATEST_SCHEMA_VERSION)
+            conn.commit()
+        except (sqlite3.Error, ValueError) as exc:
+            conn.rollback()
+            raise DatabaseMigrationError(f"SQLite history migration failed: {exc}") from exc
 
     def _migrate_legacy_real_money_schema(self, conn: sqlite3.Connection) -> None:
         """Migrate legacy REAL money columns to INTEGER cents transactionally."""
@@ -370,6 +389,7 @@ class Database:
             conn.execute("ALTER TABLE __migration_paychecks RENAME TO paychecks")
             conn.execute("DROP TABLE debts")
             conn.execute("ALTER TABLE __migration_debts RENAME TO debts")
+            self._create_history_schema(conn)
             self._validate_current_schema(conn)
             self._set_schema_version(conn, LATEST_SCHEMA_VERSION)
             conn.commit()
@@ -568,6 +588,10 @@ class Database:
                 )
 
     def _validate_current_schema(self, conn: sqlite3.Connection) -> None:
+        self._validate_current_money_schema(conn)
+        self._validate_history_schema(conn)
+
+    def _validate_current_money_schema(self, conn: sqlite3.Connection) -> None:
         expected_integer_money = {
             "paychecks": {
                 "income",
@@ -592,6 +616,219 @@ class Database:
             for column in columns:
                 if table_info.get(column) != "INTEGER":
                     raise ValueError(f"{table}.{column} must use INTEGER cent storage.")
+
+    def _create_history_schema(self, conn: sqlite3.Connection) -> None:
+        """Create version-3 local plan history and snapshot tables."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                current_version_id INTEGER,
+                notes TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (current_version_id)
+                    REFERENCES plan_versions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_active_name
+            ON plans (name)
+            WHERE archived = 0
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plan_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                change_note TEXT NOT NULL,
+                config_snapshot TEXT NOT NULL,
+                config_fingerprint TEXT NOT NULL,
+                application_version TEXT NOT NULL,
+                forecast_engine_version TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (plan_id) REFERENCES plans(id),
+                UNIQUE (plan_id, version_number)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_plan_versions_plan
+            ON plan_versions (plan_id, version_number)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forecast_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_version_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                forecast_start_date TEXT NOT NULL,
+                forecast_end_date TEXT NOT NULL,
+                debt_free_date TEXT,
+                total_projected_interest INTEGER NOT NULL,
+                total_projected_debt_payments INTEGER NOT NULL,
+                starting_debt INTEGER NOT NULL,
+                ending_debt INTEGER NOT NULL,
+                starting_savings INTEGER NOT NULL,
+                ending_savings INTEGER NOT NULL,
+                pay_period_count INTEGER NOT NULL,
+                forecast_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                warning_count INTEGER NOT NULL,
+                FOREIGN KEY (plan_version_id) REFERENCES plan_versions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_version
+            ON forecast_snapshots (plan_version_id, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forecast_periods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forecast_snapshot_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                pay_date TEXT NOT NULL,
+                income INTEGER NOT NULL,
+                fixed_expenses INTEGER NOT NULL,
+                personal_allowance INTEGER NOT NULL,
+                personal_expenses_used INTEGER NOT NULL,
+                personal_expense_reduction INTEGER NOT NULL,
+                minimum_debt_payments INTEGER NOT NULL,
+                snowball_payment INTEGER NOT NULL,
+                savings_deposit INTEGER NOT NULL,
+                savings_withdrawal INTEGER NOT NULL,
+                checking_remaining INTEGER NOT NULL,
+                reconciliation_difference INTEGER NOT NULL,
+                active_savings_goal TEXT,
+                reason_codes TEXT NOT NULL,
+                explanation TEXT NOT NULL,
+                FOREIGN KEY (forecast_snapshot_id) REFERENCES forecast_snapshots(id),
+                UNIQUE (forecast_snapshot_id, sequence_number)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_forecast_periods_snapshot_sequence
+            ON forecast_periods (forecast_snapshot_id, sequence_number)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS debt_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forecast_period_id INTEGER NOT NULL,
+                debt_identifier TEXT NOT NULL,
+                debt_name TEXT NOT NULL,
+                starting_balance INTEGER NOT NULL,
+                interest_charged INTEGER NOT NULL,
+                minimum_payment INTEGER NOT NULL,
+                extra_payment INTEGER NOT NULL,
+                total_payment INTEGER NOT NULL,
+                principal_paid INTEGER NOT NULL,
+                ending_balance INTEGER NOT NULL,
+                paid_off INTEGER NOT NULL,
+                payoff_date TEXT,
+                FOREIGN KEY (forecast_period_id) REFERENCES forecast_periods(id),
+                UNIQUE (forecast_period_id, debt_identifier)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_debt_snapshots_period
+            ON debt_snapshots (forecast_period_id, debt_identifier)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS savings_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forecast_period_id INTEGER NOT NULL UNIQUE,
+                starting_savings INTEGER NOT NULL,
+                normal_contribution INTEGER NOT NULL,
+                redirected_snowball INTEGER NOT NULL,
+                personal_expense_reduction_contribution INTEGER NOT NULL,
+                other_contribution INTEGER NOT NULL,
+                withdrawal INTEGER NOT NULL,
+                ending_savings INTEGER NOT NULL,
+                active_goal TEXT,
+                goal_target INTEGER,
+                goal_deadline TEXT,
+                projected_shortfall INTEGER NOT NULL,
+                goal_feasible_status TEXT NOT NULL,
+                FOREIGN KEY (forecast_period_id) REFERENCES forecast_periods(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS actual_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                entry_date TEXT NOT NULL,
+                entry_type TEXT NOT NULL,
+                debt_identifier TEXT,
+                amount INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                corrected_entry_id INTEGER,
+                note TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (plan_id) REFERENCES plans(id),
+                FOREIGN KEY (corrected_entry_id) REFERENCES actual_transactions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_actual_transactions_plan_date
+            ON actual_transactions (plan_id, entry_date)
+            """
+        )
+
+    def _validate_history_schema(self, conn: sqlite3.Connection) -> None:
+        required_tables = {
+            "plans",
+            "plan_versions",
+            "forecast_snapshots",
+            "forecast_periods",
+            "debt_snapshots",
+            "savings_snapshots",
+            "actual_transactions",
+        }
+        existing = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            )
+        }
+        missing = required_tables - existing
+        if missing:
+            raise ValueError(
+                f"history schema is missing table(s): {', '.join(sorted(missing))}."
+            )
 
     def _cleanup_migration_tables(self, conn: sqlite3.Connection) -> None:
         """Remove temporary migration tables after a failed migration attempt."""

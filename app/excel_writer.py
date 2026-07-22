@@ -15,9 +15,13 @@ from openpyxl.worksheet.worksheet import Worksheet
 from app.budget_engine import PayPeriodSummary
 from app.money import ZERO_MONEY, excel_number, money
 from app.models import (
+    ForecastActualComparison,
     DebtFreeTargetResult,
     DebtFreeTargetStatus,
     ForecastSummary,
+    Plan,
+    PlanComparison,
+    PlanVersion,
     ScenarioComparison,
     ScenarioResult,
 )
@@ -73,6 +77,124 @@ class ExcelWriter:
 
         workbook.save(self.path)
         return self.path
+
+    def write_history_report(
+        self,
+        plan: Plan,
+        versions: list[PlanVersion],
+        comparison: PlanComparison | None = None,
+        actual_comparison: ForecastActualComparison | None = None,
+    ) -> Path:
+        """Write optional saved-history sheets when history data is requested."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        workbook = Workbook()
+        history_sheet = workbook.active
+        history_sheet.title = "Plan History"
+        self._write_plan_history(history_sheet, plan, versions)
+        if comparison is not None:
+            self._write_plan_comparison(workbook.create_sheet("Plan Comparison"), comparison)
+        if actual_comparison is not None:
+            self._write_forecast_actual(
+                workbook.create_sheet("Forecast vs Actual"),
+                actual_comparison,
+            )
+        workbook.save(self.path)
+        return self.path
+
+    def _write_plan_history(
+        self,
+        sheet: Worksheet,
+        plan: Plan,
+        versions: list[PlanVersion],
+    ) -> None:
+        sheet["A1"] = f"Plan History: {plan.name}"
+        sheet["A1"].font = Font(bold=True, size=14)
+        self._append_row(
+            sheet,
+            [
+                "Version",
+                "Created Date",
+                "Change Note",
+                "Configuration Fingerprint",
+                "Active",
+                "Application Version",
+                "Engine Version",
+            ],
+        )
+        for version in versions:
+            self._append_row(
+                sheet,
+                [
+                    version.version_number,
+                    version.created_at,
+                    version.change_note,
+                    version.config_fingerprint,
+                    self._yes_no(version.active),
+                    version.application_version,
+                    version.forecast_engine_version,
+                ],
+            )
+        self._format_table(sheet, header_row=2)
+
+    def _write_plan_comparison(
+        self,
+        sheet: Worksheet,
+        comparison: PlanComparison,
+    ) -> None:
+        sheet["A1"] = "Plan Comparison"
+        sheet["A1"].font = Font(bold=True, size=14)
+        rows = [
+            ("Debt-Free Date Difference Days", comparison.debt_free_date_difference_days),
+            ("Interest Difference", comparison.interest_difference),
+            ("Debt Payment Difference", comparison.debt_payment_difference),
+            ("Savings Difference", comparison.savings_difference),
+            ("Personal Spending Difference", comparison.personal_spending_difference),
+            ("Pay Period Difference", comparison.pay_period_difference),
+            ("First Different Period", comparison.first_different_period),
+            ("Payoff Order Changed", self._yes_no(comparison.payoff_order_changed)),
+            ("Deadline Priority Changed", self._yes_no(comparison.deadline_priority_changed)),
+            ("Feasible", self._yes_no(comparison.feasible)),
+            ("Interpretation", comparison.explanation),
+        ]
+        self._append_row(sheet, ["Metric", "Value"])
+        for row in rows:
+            self._append_row(sheet, list(row))
+        self._format_table(sheet, currency_columns=[2], date_columns=[2], header_row=2)
+
+    def _write_forecast_actual(
+        self,
+        sheet: Worksheet,
+        comparison: ForecastActualComparison,
+    ) -> None:
+        sheet["A1"] = "Forecast vs Actual"
+        sheet["A1"].font = Font(bold=True, size=14)
+        self._append_row(sheet, ["Metric", "Planned", "Actual", "Variance", "Status"])
+        rows = [
+            ("Income", comparison.planned_income, comparison.actual_income),
+            ("Bills", comparison.planned_bills, comparison.actual_bills),
+            (
+                "Debt Payments",
+                comparison.planned_debt_payments,
+                comparison.actual_debt_payments,
+            ),
+            ("Savings", comparison.planned_savings, comparison.actual_savings),
+            (
+                "Personal Spending",
+                comparison.planned_personal_spending,
+                comparison.actual_personal_spending,
+            ),
+            (
+                "Remaining Cash",
+                comparison.planned_remaining_cash,
+                comparison.actual_remaining_cash,
+            ),
+        ]
+        for metric, planned, actual in rows:
+            self._append_row(
+                sheet,
+                [metric, planned, actual, money(actual - planned), comparison.status],
+            )
+        self._format_table(sheet, currency_columns=[2, 3, 4], header_row=2)
 
     def _write_pay_period_summaries(
         self,

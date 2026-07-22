@@ -380,6 +380,7 @@ DebtSnowball/
 | DebtFreeTargetCalculator | Finds the minimum extra snowball payment needed for a target debt-free date. |
 | ExcelWriter | Creates the Excel workbook, dashboard worksheet, data worksheets, and charts. |
 | Database | Provides SQLite persistence support for generated budget history. |
+| PlanHistoryService | Saves local plan versions, forecast snapshots, actual entries, comparisons, and exports. |
 
 ---
 
@@ -446,6 +447,62 @@ Developer rules for future database work:
 - Keep percentages and rates, such as APR, separate from money storage.
 - Future schema changes should add a new `PRAGMA user_version` migration.
 - If a migration fails, keep the `.bak` file, fix the source data or schema, and rerun the application.
+
+---
+
+## Local Plan History
+
+DebtSnowball can now keep durable local plan history in SQLite. The default
+`python run.py` workflow still generates the normal workbook without requiring
+saved history.
+
+Optional history features include:
+
+- Named plans with immutable versions.
+- Decimal-safe configuration snapshots.
+- SHA-256 configuration and forecast fingerprints.
+- Forecast snapshots with period, debt, and savings detail.
+- Actual activity entries kept separate from forecast assumptions.
+- Reversal entries for corrections, preserving an audit trail.
+- Neutral plan comparison and forecast-versus-actual status labels.
+- Portable JSON export and CSV forecast-period export.
+
+Useful commands:
+
+```bash
+python run.py plan save --name "Current Plan"
+python run.py plan list
+python run.py plan history --plan-id 1
+python run.py plan compare --from-version 1 --to-version 2
+python run.py plan restore --version 1
+python run.py actual add --plan-id 1 --date 2026-07-17 --type debt_payment --amount 215.00
+python run.py actual summary --plan-id 1
+python run.py export --plan-id 1 --path output/current-plan.json
+python run.py import --path output/current-plan.json --name "Imported Plan"
+```
+
+SQLite schema version `3` adds:
+
+- `plans`
+- `plan_versions`
+- `forecast_snapshots`
+- `forecast_periods`
+- `debt_snapshots`
+- `savings_snapshots`
+- `actual_transactions`
+
+Version `2` databases migrate to version `3` without deleting existing paycheck
+or debt rows. File-backed databases receive a timestamped backup before the
+schema migration.
+
+Privacy notes:
+
+- DebtSnowball keeps plan and actual-history data local by default.
+- It does not connect to bank accounts.
+- It does not upload financial data.
+- It does not sell or share user information.
+- Database backups and exported files may contain sensitive financial data.
+- Users should protect SQLite, backup, JSON, CSV, and workbook files.
 
 ---
 

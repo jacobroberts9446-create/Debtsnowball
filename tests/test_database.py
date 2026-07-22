@@ -301,6 +301,65 @@ def test_legacy_real_database_migrates_to_integer_cents_with_backup(tmp_path):
     assert database.load_debts()[0]["total_interest_paid"] == Decimal("23.46")
 
 
+def test_version_2_database_migrates_to_version_3_history_schema_with_backup(tmp_path):
+    db_path = tmp_path / "v2.sqlite"
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA user_version = 2")
+        conn.execute(
+            """
+            CREATE TABLE paychecks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pay_date TEXT NOT NULL UNIQUE,
+                income INTEGER NOT NULL,
+                bills_paid INTEGER NOT NULL,
+                debt_minimums INTEGER NOT NULL,
+                snowball_payment INTEGER NOT NULL,
+                savings_added INTEGER NOT NULL,
+                checking_remaining INTEGER NOT NULL,
+                notes TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE debts (
+                name TEXT PRIMARY KEY,
+                balance INTEGER NOT NULL,
+                apr REAL NOT NULL,
+                minimum_payment INTEGER NOT NULL,
+                total_paid INTEGER NOT NULL,
+                total_interest_paid INTEGER NOT NULL,
+                status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paychecks (pay_date, income, bills_paid, debt_minimums,
+                                   snowball_payment, savings_added,
+                                   checking_remaining, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-07-17", 223400, 76600, 103800, 21500, 21500, 0, "v2"),
+        )
+        conn.commit()
+
+    database = Database(db_path)
+    database.initialize()
+    database.initialize()
+
+    assert len(list(tmp_path.glob("v2.sqlite.v2-integer-cents.*.bak"))) == 1
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert schema_version(conn) == LATEST_SCHEMA_VERSION
+        assert "plans" in table_names(conn)
+        assert "forecast_snapshots" in table_names(conn)
+        assert conn.execute("SELECT income, savings_added FROM paychecks").fetchone() == (
+            223400,
+            21500,
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_current_version_database_initialization_is_idempotent(tmp_path):
     db_path = tmp_path / "plan.sqlite"
     database = Database(db_path)

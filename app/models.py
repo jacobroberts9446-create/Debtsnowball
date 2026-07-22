@@ -491,3 +491,161 @@ class DebtFreeTargetResult:
     baseline_total_snowball_paid: Decimal = Decimal("0.00")
     baseline_ending_debt: Decimal = Decimal("0.00")
     iterations: list[DebtFreeTargetIteration] = field(default_factory=list)
+
+
+class ActualEntryType(StrEnum):
+    """Supported posted actual-activity entry types."""
+
+    INCOME_RECEIVED = "income_received"
+    BILL_PAID = "bill_paid"
+    DEBT_PAYMENT = "debt_payment"
+    SAVINGS_DEPOSIT = "savings_deposit"
+    SAVINGS_WITHDRAWAL = "savings_withdrawal"
+    PERSONAL_SPENDING = "personal_spending"
+    ADJUSTMENT = "adjustment"
+
+
+class AllocationReasonCode(StrEnum):
+    """Machine-readable reasons for forecast-period allocations."""
+
+    NORMAL_SAVINGS = "NORMAL_SAVINGS"
+    MINIMUM_DEBT_PAYMENT = "MINIMUM_DEBT_PAYMENT"
+    DEBT_SNOWBALL = "DEBT_SNOWBALL"
+    DEADLINE_SAVINGS_REDIRECTION = "DEADLINE_SAVINGS_REDIRECTION"
+    PERSONAL_EXPENSE_REDUCTION = "PERSONAL_EXPENSE_REDUCTION"
+    SAVINGS_GOAL_CAP = "SAVINGS_GOAL_CAP"
+    FINAL_DEBT_PAYOFF = "FINAL_DEBT_PAYOFF"
+    WITHDRAWAL_PROCESSED = "WITHDRAWAL_PROCESSED"
+    POST_WITHDRAWAL_NORMAL_ALLOCATION = "POST_WITHDRAWAL_NORMAL_ALLOCATION"
+    NO_AVAILABLE_SURPLUS = "NO_AVAILABLE_SURPLUS"
+
+
+class DataWarningSeverity(StrEnum):
+    """Severity levels for reviewable financial plan warnings."""
+
+    INFORMATION = "information"
+    REVIEW = "review"
+    IMPORTANT = "important"
+
+
+@dataclass(frozen=True)
+class Plan:
+    """A durable local financial plan."""
+
+    id: int
+    name: str
+    description: str
+    created_at: str
+    updated_at: str
+    archived: bool
+    current_version_id: int | None
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class PlanVersion:
+    """Immutable saved plan-input version."""
+
+    id: int
+    plan_id: int
+    version_number: int
+    created_at: str
+    source: str
+    change_note: str
+    config_snapshot: str
+    config_fingerprint: str
+    application_version: str
+    forecast_engine_version: str
+    schema_version: int
+    active: bool
+
+
+@dataclass(frozen=True)
+class ForecastSnapshotRecord:
+    """Persisted forecast snapshot metadata."""
+
+    id: int
+    plan_version_id: int
+    forecast_fingerprint: str
+    debt_free_date: date | None
+    total_projected_interest: Decimal
+    starting_debt: Decimal
+    ending_debt: Decimal
+    starting_savings: Decimal
+    ending_savings: Decimal
+    warning_count: int
+
+
+@dataclass(frozen=True)
+class ActualTransaction:
+    """Immutable actual financial activity entry."""
+
+    id: int
+    plan_id: int
+    entry_date: date
+    entry_type: ActualEntryType
+    amount: Decimal
+    category: str
+    description: str
+    source: str
+    debt_identifier: str | None = None
+    corrected_entry_id: int | None = None
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class DataQualityWarning:
+    """Plain-language warning about a plan, forecast, or actual data point."""
+
+    code: str
+    severity: DataWarningSeverity
+    message: str
+    relevant_date: date | None = None
+    relevant_name: str | None = None
+    suggested_action: str | None = None
+
+
+@dataclass(frozen=True)
+class AllocationExplanation:
+    """Explain why one forecast period allocated money the way it did."""
+
+    reason_codes: list[AllocationReasonCode]
+    explanation: str
+
+
+@dataclass(frozen=True)
+class PlanComparison:
+    """Neutral comparison between two saved plan forecasts."""
+
+    earlier_version: int
+    later_version: int
+    debt_free_date_difference_days: int | None
+    interest_difference: Decimal
+    debt_payment_difference: Decimal
+    savings_difference: Decimal
+    personal_spending_difference: Decimal
+    pay_period_difference: int
+    first_different_period: date | None
+    payoff_order_changed: bool
+    deadline_priority_changed: bool
+    feasible: bool
+    explanation: str
+
+
+@dataclass(frozen=True)
+class ForecastActualComparison:
+    """Planned-versus-actual totals for a plan period."""
+
+    planned_income: Decimal
+    actual_income: Decimal
+    planned_bills: Decimal
+    actual_bills: Decimal
+    planned_debt_payments: Decimal
+    actual_debt_payments: Decimal
+    planned_savings: Decimal
+    actual_savings: Decimal
+    planned_personal_spending: Decimal
+    actual_personal_spending: Decimal
+    planned_remaining_cash: Decimal
+    actual_remaining_cash: Decimal
+    status: str
