@@ -12,6 +12,7 @@ from app.calendar_engine import CalendarEngine
 from app.config import Config
 from app.excel_writer import ExcelWriter
 from app.forecast_engine import ForecastEngine
+from app.money import format_currency
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
@@ -54,36 +55,36 @@ def main():
             f"Pay Period: {summary.start_date:%b %d, %Y} "
             f"to {summary.end_date:%b %d, %Y}"
         )
-        print(f"  Income:          ${summary.income:,.2f}")
-        print(f"  Bills:           ${summary.bills_paid:,.2f}")
-        print(f"  Debt Minimums:   ${summary.debt_minimums:,.2f}")
+        print(f"  Income:          {format_currency(summary.income)}")
+        print(f"  Bills:           {format_currency(summary.bills_paid)}")
+        print(f"  Debt Minimums:   {format_currency(summary.debt_minimums)}")
         if summary.active_savings_goal_name:
             print(f"  Savings Goal:    {summary.active_savings_goal_name}")
             print(
                 "  Available After Required Payments: "
-                f"${summary.available_after_required_payments:,.2f}"
+                f"{format_currency(summary.available_after_required_payments)}"
             )
             print(
                 "  Snowball Redirected To Savings: "
-                f"${summary.snowball_reduction:,.2f}"
+                f"{format_currency(summary.snowball_reduction)}"
             )
             if summary.personal_expense_reduction > 0:
                 print(
                     "  Personal Expense Reduction: "
-                    f"${summary.personal_expense_reduction:,.2f}"
+                    f"{format_currency(summary.personal_expense_reduction)}"
                 )
             if summary.projected_savings_shortfall > 0:
                 print(
                     "  Projected Savings Shortfall: "
-                    f"${summary.projected_savings_shortfall:,.2f}"
+                    f"{format_currency(summary.projected_savings_shortfall)}"
                 )
-        print(f"  Savings Deposit: ${summary.savings_contribution:,.2f}")
-        print(f"  Snowball Payment: ${summary.snowball_payment:,.2f}")
-        print(f"  Remaining Cash:  ${summary.remaining_cash:,.2f}")
+        print(f"  Savings Deposit: {format_currency(summary.savings_contribution)}")
+        print(f"  Snowball Payment: {format_currency(summary.snowball_payment)}")
+        print(f"  Remaining Cash:  {format_currency(summary.remaining_cash)}")
         print("  Debt Balances:")
 
         for debt in summary.active_debt_balances:
-            print(f"    {debt.name:<15} ${debt.balance:,.2f}")
+            print(f"    {debt.name:<15} {format_currency(debt.balance)}")
 
         if summary.paid_off_debts:
             paid_off = ", ".join(debt.name for debt in summary.paid_off_debts)

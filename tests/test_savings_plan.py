@@ -96,8 +96,8 @@ def test_backward_compatibility_without_savings_plan():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.savings_contribution == 500.0
-    assert summary.savings_balance == 500.0
+    assert summary.savings_contribution == Decimal("500.00")
+    assert summary.savings_balance == Decimal("500.00")
     assert summary.active_savings_goal_name is None
 
 
@@ -109,14 +109,14 @@ def test_dated_goal_with_drain_and_second_goal_transition():
     summaries = engine.build_plan(periods)
 
     assert summaries[0].active_savings_goal_name == "First goal"
-    assert summaries[0].savings_balance == 500.0
+    assert summaries[0].savings_balance == Decimal("500.00")
     assert summaries[1].active_savings_goal_name == "Second goal"
-    assert summaries[1].savings_balance_before_withdrawal == 500.0
-    assert summaries[1].planned_withdrawal_amount == 500.0
-    assert summaries[1].savings_balance_after_withdrawal == 0.0
-    assert summaries[1].savings_contribution == 500.0
-    assert summaries[1].savings_balance == 500.0
-    assert summaries[1].active_savings_target == 500.0
+    assert summaries[1].savings_balance_before_withdrawal == Decimal("500.00")
+    assert summaries[1].planned_withdrawal_amount == Decimal("500.00")
+    assert summaries[1].savings_balance_after_withdrawal == Decimal("0.00")
+    assert summaries[1].savings_contribution == Decimal("500.00")
+    assert summaries[1].savings_balance == Decimal("500.00")
+    assert summaries[1].active_savings_target == Decimal("500.00")
 
     stage_results = engine.savings_stage_results()
     first_stage = stage_results[0]
@@ -145,9 +145,9 @@ def test_withdrawal_does_not_affect_debt_minimums_or_balances():
 
     summaries = BudgetEngine(config).build_plan(periods)
 
-    assert summaries[1].debt_minimums == 100.0
-    assert summaries[1].active_debt_balances[0].balance == 950.0
-    assert summaries[1].snowball_payment == 450.0
+    assert summaries[1].debt_minimums == Decimal("100.00")
+    assert summaries[1].active_debt_balances[0].balance == Decimal("950.00")
+    assert summaries[1].snowball_payment == Decimal("450.00")
 
 
 def test_fixed_withdrawal_is_capped_and_reports_shortfall():
@@ -200,11 +200,11 @@ def test_deadline_priority_reduces_snowball_without_reducing_minimums():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.available_after_required_payments == 900.0
-    assert summary.debt_minimums == 100.0
-    assert summary.savings_contribution == 600.0
-    assert summary.snowball_payment == 300.0
-    assert summary.snowball_reduction == 150.0
+    assert summary.available_after_required_payments == Decimal("900.00")
+    assert summary.debt_minimums == Decimal("100.00")
+    assert summary.savings_contribution == Decimal("600.00")
+    assert summary.snowball_payment == Decimal("300.00")
+    assert summary.snowball_reduction == Decimal("150.00")
 
 
 def test_deadline_priority_can_reduce_snowball_to_zero():
@@ -217,12 +217,12 @@ def test_deadline_priority_can_reduce_snowball_to_zero():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.available_after_required_payments == 1000.0
-    assert summary.deadline_required_savings_contribution == 3000.0
-    assert summary.savings_contribution == 1000.0
-    assert summary.snowball_payment == 0.0
-    assert summary.snowball_reduction == 500.0
-    assert summary.projected_savings_shortfall == 2000.0
+    assert summary.available_after_required_payments == Decimal("1000.00")
+    assert summary.deadline_required_savings_contribution == Decimal("3000.00")
+    assert summary.savings_contribution == Decimal("1000.00")
+    assert summary.snowball_payment == Decimal("0.00")
+    assert summary.snowball_reduction == Decimal("500.00")
+    assert summary.projected_savings_shortfall == Decimal("2000.00")
 
 
 def test_deadline_priority_personal_reduction_is_capped_at_allowance():
@@ -239,10 +239,10 @@ def test_deadline_priority_personal_reduction_is_capped_at_allowance():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.personal_expense_reduction == 100.0
-    assert summary.bills_paid == 100.0
-    assert summary.actual_personal_allowance == 0.0
-    assert summary.savings_contribution == 1000.0
+    assert summary.personal_expense_reduction == Decimal("100.00")
+    assert summary.bills_paid == Decimal("100.00")
+    assert summary.actual_personal_allowance == Decimal("0.00")
+    assert summary.savings_contribution == Decimal("1000.00")
 
 
 def test_priority_until_funded_rebuilds_savings_before_snowball_resumes():
@@ -262,12 +262,12 @@ def test_priority_until_funded_rebuilds_savings_before_snowball_resumes():
     summaries = BudgetEngine(config).build_plan(periods)
 
     assert summaries[1].active_savings_goal_name == "Second goal"
-    assert summaries[1].savings_balance == 1000.0
-    assert summaries[1].snowball_payment == 0.0
-    assert summaries[2].savings_contribution == 500.0
-    assert summaries[2].snowball_payment == 500.0
-    assert summaries[3].savings_contribution == 0.0
-    assert summaries[3].snowball_payment == 1000.0
+    assert summaries[1].savings_balance == Decimal("1000.00")
+    assert summaries[1].snowball_payment == Decimal("0.00")
+    assert summaries[2].savings_contribution == Decimal("500.00")
+    assert summaries[2].snowball_payment == Decimal("500.00")
+    assert summaries[3].savings_contribution == Decimal("0.00")
+    assert summaries[3].snowball_payment == Decimal("1000.00")
 
 
 def test_current_plan_priority_reaches_maximum_possible_deadline_balance():
@@ -280,28 +280,28 @@ def test_current_plan_priority_reaches_maximum_possible_deadline_balance():
     first_stage = engine.savings_stage_results()[0]
     withdrawal = engine.planned_withdrawal_results()[0]
 
-    assert summaries[0].available_after_required_payments == 430.0
-    assert summaries[0].bills_paid == 766.0
-    assert summaries[0].normal_savings_contribution == 215.0
-    assert summaries[0].snowball_reduction == 215.0
-    assert summaries[0].personal_expense_reduction == 0.0
-    assert summaries[0].savings_contribution == 430.0
-    assert summaries[0].snowball_payment == 0.0
-    assert summaries[1].available_after_required_payments == 1137.0
-    assert summaries[1].bills_paid == 924.0
-    assert summaries[1].normal_savings_contribution == 470.0
-    assert summaries[1].snowball_reduction == 0.0
-    assert summaries[1].personal_expense_reduction == 0.0
-    assert summaries[1].savings_contribution == 470.0
-    assert summaries[1].snowball_payment == 667.0
+    assert summaries[0].available_after_required_payments == Decimal("430.00")
+    assert summaries[0].bills_paid == Decimal("766.00")
+    assert summaries[0].normal_savings_contribution == Decimal("215.00")
+    assert summaries[0].snowball_reduction == Decimal("215.00")
+    assert summaries[0].personal_expense_reduction == Decimal("0.00")
+    assert summaries[0].savings_contribution == Decimal("430.00")
+    assert summaries[0].snowball_payment == Decimal("0.00")
+    assert summaries[1].available_after_required_payments == Decimal("1137.00")
+    assert summaries[1].bills_paid == Decimal("924.00")
+    assert summaries[1].normal_savings_contribution == Decimal("470.00")
+    assert summaries[1].snowball_reduction == Decimal("0.00")
+    assert summaries[1].personal_expense_reduction == Decimal("0.00")
+    assert summaries[1].savings_contribution == Decimal("470.00")
+    assert summaries[1].snowball_payment == Decimal("667.00")
     assert first_stage.amount_at_deadline == Decimal("2400.00")
     assert first_stage.shortfall_at_deadline == Decimal("0.00")
     assert first_stage.feasible_under_current_plan is True
     assert first_stage.additional_funding_needed == Decimal("0.00")
     assert withdrawal.actual_amount_withdrawn == Decimal("2400.00")
     assert summaries[2].active_savings_goal_name is None
-    assert summaries[2].savings_balance_after_withdrawal == 0.0
-    assert summaries[2].personal_expense_reduction == 0.0
+    assert summaries[2].savings_balance_after_withdrawal == Decimal("0.00")
+    assert summaries[2].personal_expense_reduction == Decimal("0.00")
 
 
 def test_august_14_paycheck_is_not_eligible_for_august_11_deadline():
@@ -326,13 +326,13 @@ def test_disabled_deadline_priority_plan_preserves_standard_allocation():
 
     assert config.savings_plan.deadline_priority_enabled is False
     assert summaries[0].active_savings_goal_name is None
-    assert summaries[0].savings_contribution == 215.0
-    assert summaries[0].snowball_payment == 215.0
-    assert summaries[0].personal_expense_reduction == 0.0
-    assert summaries[1].savings_contribution == 568.5
-    assert summaries[1].snowball_payment == 568.5
-    assert summaries[1].personal_expense_reduction == 0.0
-    assert summaries[2].planned_withdrawal_amount == 0.0
+    assert summaries[0].savings_contribution == Decimal("215.00")
+    assert summaries[0].snowball_payment == Decimal("215.00")
+    assert summaries[0].personal_expense_reduction == Decimal("0.00")
+    assert summaries[1].savings_contribution == Decimal("568.50")
+    assert summaries[1].snowball_payment == Decimal("568.50")
+    assert summaries[1].personal_expense_reduction == Decimal("0.00")
+    assert summaries[2].planned_withdrawal_amount == Decimal("0.00")
     assert engine.savings_stage_results() == []
     assert engine.planned_withdrawal_results() == []
 

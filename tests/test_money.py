@@ -6,7 +6,15 @@ import pytest
 
 from app.budget_engine import BudgetEngine
 from app.models import Bill, BudgetSettings, Debt, PayPeriod, ScheduledPayment
-from app.money import CENT, ZERO_MONEY, excel_number, money, round_money, to_decimal
+from app.money import (
+    CENT,
+    ZERO_MONEY,
+    excel_number,
+    format_currency,
+    money,
+    round_money,
+    to_decimal,
+)
 
 
 def test_money_constants_are_decimal_values():
@@ -43,6 +51,12 @@ def test_negative_zero_is_normalized_for_reported_money_values():
     assert not money(Decimal("-0.00")).is_signed()
     assert not round_money("-0.004").is_signed()
     assert excel_number(Decimal("-0.00")) == 0.0
+
+
+def test_format_currency_normalizes_reported_money():
+    assert format_currency(Decimal("-0.00")) == "$0.00"
+    assert format_currency(Decimal("215")) == "$215.00"
+    assert format_currency(Decimal("568.5")) == "$568.50"
 
 
 @pytest.mark.parametrize(

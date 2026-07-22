@@ -27,9 +27,9 @@ def test_minimum_payments_are_applied_for_scheduled_debts_only():
 
     payments = DebtEngine([card, loan]).pay_minimums_due(scheduled)
 
-    assert payments == {"Card": 50.0}
-    assert card.balance == 450.0
-    assert loan.balance == 800.0
+    assert payments == {"Card": Decimal("50.00")}
+    assert card.balance == Decimal("450.00")
+    assert loan.balance == Decimal("800.00")
 
 
 def test_snowball_rolls_over_across_multiple_debts():
@@ -42,10 +42,10 @@ def test_snowball_rolls_over_across_multiple_debts():
 
     payments, remaining = engine.apply_snowball(150)
 
-    assert payments == {"A": 50.0, "B": 75.0, "C": 25.0}
-    assert remaining == 0.0
+    assert payments == {"A": Decimal("50.00"), "B": Decimal("75.00"), "C": Decimal("25.00")}
+    assert remaining == Decimal("0.00")
     assert [debt.name for debt in engine.active_debts] == ["C"]
-    assert engine.freed_minimum_payment == 30.0
+    assert engine.freed_minimum_payment == Decimal("30.00")
 
 
 def test_empty_debt_list_handles_all_operations():
@@ -53,7 +53,7 @@ def test_empty_debt_list_handles_all_operations():
 
     assert engine.accrue_interest() == {}
     assert engine.pay_minimums_due([]) == {}
-    assert engine.apply_snowball(100) == ({}, 100.0)
+    assert engine.apply_snowball(100) == ({}, Decimal("100.00"))
     assert engine.process_pay_period([], 100)["active_debts"] == []
 
 
@@ -64,8 +64,8 @@ def test_zero_snowball_payment_does_not_change_debt():
     payments, remaining = engine.apply_snowball(0)
 
     assert payments == {}
-    assert remaining == 0.0
-    assert debt.balance == 500.0
+    assert remaining == Decimal("0.00")
+    assert debt.balance == Decimal("500.00")
 
 
 def test_exact_debt_payoff_removes_debt_and_frees_minimum():
@@ -74,11 +74,11 @@ def test_exact_debt_payoff_removes_debt_and_frees_minimum():
 
     payments, remaining = engine.apply_snowball(100)
 
-    assert payments == {"Card": 100.0}
-    assert remaining == 0.0
+    assert payments == {"Card": Decimal("100.00")}
+    assert remaining == Decimal("0.00")
     assert engine.active_debts == []
     assert engine.paid_off_summary()[0]["name"] == "Card"
-    assert engine.freed_minimum_payment == 25.0
+    assert engine.freed_minimum_payment == Decimal("25.00")
 
 
 def test_remaining_penny_is_explicitly_treated_as_paid():
@@ -132,10 +132,10 @@ def test_multiple_debts_paid_off_in_one_snowball_payment():
 
     payments, remaining = engine.apply_snowball(100)
 
-    assert payments == {"A": 40.0, "B": 60.0}
-    assert remaining == 0.0
+    assert payments == {"A": Decimal("40.00"), "B": Decimal("60.00")}
+    assert remaining == Decimal("0.00")
     assert [debt.name for debt in engine.active_debts] == ["C"]
-    assert engine.freed_minimum_payment == 30.0
+    assert engine.freed_minimum_payment == Decimal("30.00")
 
 
 def test_very_large_snowball_payment_pays_all_debts_and_returns_leftover():
@@ -147,8 +147,8 @@ def test_very_large_snowball_payment_pays_all_debts_and_returns_leftover():
 
     payments, remaining = engine.apply_snowball(1000)
 
-    assert payments == {"A": 40.0, "B": 60.0}
-    assert remaining == 900.0
+    assert payments == {"A": Decimal("40.00"), "B": Decimal("60.00")}
+    assert remaining == Decimal("900.00")
     assert engine.active_debts == []
 
 
@@ -162,9 +162,9 @@ def test_freed_minimum_is_not_double_counted_in_process_pay_period_regression():
 
     result = engine.process_pay_period(scheduled, 100)
 
-    assert result["minimums"] == {"A": 50.0}
-    assert result["snowball"] == {"B": 100.0}
-    assert result["freed_minimum_payment"] == 50.0
+    assert result["minimums"] == {"A": Decimal("50.00")}
+    assert result["snowball"] == {"B": Decimal("100.00")}
+    assert result["freed_minimum_payment"] == Decimal("50.00")
 
 
 def test_snowball_targets_correct_debt_and_rolls_over_after_payoff_regression():
@@ -182,8 +182,15 @@ def test_snowball_targets_correct_debt_and_rolls_over_after_payoff_regression():
 
     period_one = engine.process_pay_period(period_one_scheduled, snowball_amount=150)
 
-    assert period_one["minimums"] == {"Debt A": 10.0, "Debt B": 20.0, "Debt C": 30.0}
-    assert period_one["snowball"] == {"Debt A": 90.0, "Debt B": 60.0}
+    assert period_one["minimums"] == {
+        "Debt A": Decimal("10.00"),
+        "Debt B": Decimal("20.00"),
+        "Debt C": Decimal("30.00"),
+    }
+    assert period_one["snowball"] == {
+        "Debt A": Decimal("90.00"),
+        "Debt B": Decimal("60.00"),
+    }
     assert "Debt C" not in period_one["snowball"]
     assert money(debts[0].balance) == Decimal("0.00")
     assert money(debts[1].balance) == Decimal("120.00")
@@ -204,8 +211,11 @@ def test_snowball_targets_correct_debt_and_rolls_over_after_payoff_regression():
 
     period_two = engine.process_pay_period(period_two_scheduled, snowball_amount=40)
 
-    assert period_two["minimums"] == {"Debt B": 20.0, "Debt C": 30.0}
-    assert period_two["snowball"] == {"Debt B": 50.0}
+    assert period_two["minimums"] == {
+        "Debt B": Decimal("20.00"),
+        "Debt C": Decimal("30.00"),
+    }
+    assert period_two["snowball"] == {"Debt B": Decimal("50.00")}
     assert "Debt A" not in period_two["minimums"]
     assert "Debt A" not in period_two["snowball"]
     assert "Debt C" not in period_two["snowball"]
@@ -232,9 +242,20 @@ def test_interest_accrues_before_minimums_and_snowball_targeting_regression():
 
     result = engine.process_pay_period(scheduled, snowball_amount=95)
 
-    assert result["interest"] == {"Debt A": 1.0, "Debt B": 2.0, "Debt C": 3.0}
-    assert result["minimums"] == {"Debt A": 10.0, "Debt B": 20.0, "Debt C": 30.0}
-    assert result["snowball"] == {"Debt A": 91.0, "Debt B": 4.0}
+    assert result["interest"] == {
+        "Debt A": Decimal("1.00"),
+        "Debt B": Decimal("2.00"),
+        "Debt C": Decimal("3.00"),
+    }
+    assert result["minimums"] == {
+        "Debt A": Decimal("10.00"),
+        "Debt B": Decimal("20.00"),
+        "Debt C": Decimal("30.00"),
+    }
+    assert result["snowball"] == {
+        "Debt A": Decimal("91.00"),
+        "Debt B": Decimal("4.00"),
+    }
     assert "Debt C" not in result["snowball"]
     assert money(debts[0].balance) == Decimal("0.00")
     assert money(debts[1].balance) == Decimal("178.00")
@@ -243,3 +264,78 @@ def test_interest_accrues_before_minimums_and_snowball_targeting_regression():
     assert [debt["name"] for debt in result["paid_off_debts"]] == ["Debt A"]
     assert money(debts[1].total_interest_paid) == Decimal("2.00")
     assert money(debts[2].total_interest_paid) == Decimal("3.00")
+
+
+def test_repeating_apr_interest_is_reported_with_half_up_cents():
+    debt = Debt("Card", balance="1000.00", apr="17.99", minimum="0.00", due_day=1, snowball_order=1)
+
+    interest = debt.add_interest()
+
+    assert interest == Decimal("6.92")
+    assert money(debt.total_interest_paid) == Decimal("6.92")
+
+
+def test_half_cent_interest_rounds_up_for_reported_interest():
+    debt = Debt("Card", balance="1.00", apr="13.00", minimum="0.00", due_day=1, snowball_order=1)
+
+    interest = debt.add_interest()
+
+    assert interest == Decimal("0.01")
+
+
+def test_payment_equal_to_balance_plus_interest_pays_off_without_negative_balance():
+    debt = Debt("Card", balance="100.00", apr="26.00", minimum="0.00", due_day=1, snowball_order=1)
+    engine = DebtEngine([debt])
+
+    result = engine.process_pay_period([], Decimal("101.00"))
+
+    assert result["interest"] == {"Card": Decimal("1.00")}
+    assert result["snowball"] == {"Card": Decimal("101.00")}
+    assert debt.balance == Decimal("0.00")
+    assert debt.total_paid == Decimal("101.00")
+
+
+def test_payment_exceeding_balance_plus_interest_returns_remaining_cash():
+    debt = Debt("Card", balance="100.00", apr="26.00", minimum="0.00", due_day=1, snowball_order=1)
+    engine = DebtEngine([debt])
+
+    result = engine.process_pay_period([], Decimal("150.00"))
+
+    assert result["snowball"] == {"Card": Decimal("101.00")}
+    assert result["snowball_remaining"] == Decimal("49.00")
+    assert debt.balance == Decimal("0.00")
+
+
+def test_zero_percent_debt_has_no_interest_and_no_negative_zero():
+    debt = Debt("Card", balance="100.00", apr="0.00", minimum="0.00", due_day=1, snowball_order=1)
+    engine = DebtEngine([debt])
+
+    result = engine.process_pay_period([], Decimal("100.00"))
+
+    assert result["interest"] == {"Card": Decimal("0.00")}
+    assert debt.balance == Decimal("0.00")
+    assert not debt.balance.is_signed()
+
+
+def test_very_small_and_large_balances_remain_exact_after_payment():
+    small = Debt("Small", balance="0.02", apr="0", minimum="0", due_day=1, snowball_order=1)
+    large = Debt(
+        "Large",
+        balance="999999999.99",
+        apr="0",
+        minimum="0",
+        due_day=1,
+        snowball_order=2,
+    )
+    engine = DebtEngine([small, large])
+
+    payments, remaining = engine.apply_snowball(Decimal("1000000000.00"))
+
+    assert payments == {
+        "Small": Decimal("0.02"),
+        "Large": Decimal("999999999.98"),
+    }
+    assert remaining == Decimal("0.00")
+    assert small.balance == Decimal("0.00")
+    assert large.balance == Decimal("0.00")
+    assert large.active is False

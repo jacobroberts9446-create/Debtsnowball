@@ -22,6 +22,7 @@ from app.models import (
     ForecastSummary,
     Savings,
 )
+from app.money import money
 
 
 def test_calendar_engine_generates_biweekly_periods():
@@ -122,6 +123,49 @@ def test_database_saves_paychecks_and_debts(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM debts").fetchone()[0] == 1
 
 
+def test_database_real_boundary_reloads_money_as_normalized_decimal(tmp_path):
+    db_path = tmp_path / "plan.sqlite"
+    paychecks = [
+        SimpleNamespace(
+            pay_date=date(2026, 1, 2),
+            income=Decimal("1500.00"),
+            bills_paid=Decimal("215.00"),
+            debt_minimums=Decimal("0.01"),
+            snowball_payment=Decimal("568.50"),
+            savings_added=Decimal("2400.00"),
+            checking_remaining=Decimal("-0.00"),
+            notes=[],
+        )
+    ]
+    debts = [
+        {
+            "name": "Card",
+            "balance": Decimal("999999999.99"),
+            "apr": Decimal("26"),
+            "minimum": Decimal("0.02"),
+            "total_paid": Decimal("215.00"),
+            "total_interest_paid": Decimal("23.46"),
+            "status": "active",
+        }
+    ]
+    database = Database(db_path)
+
+    database.save_plan(paychecks, debts)
+    saved_paycheck = database.load_paychecks()[0]
+    saved_debt = database.load_debts()[0]
+
+    assert saved_paycheck["income"] == Decimal("1500.00")
+    assert saved_paycheck["bills_paid"] == Decimal("215.00")
+    assert saved_paycheck["debt_minimums"] == Decimal("0.01")
+    assert saved_paycheck["snowball_payment"] == Decimal("568.50")
+    assert saved_paycheck["savings_added"] == Decimal("2400.00")
+    assert saved_paycheck["checking_remaining"] == Decimal("0.00")
+    assert not saved_paycheck["checking_remaining"].is_signed()
+    assert saved_debt["balance"] == Decimal("999999999.99")
+    assert saved_debt["minimum"] == Decimal("0.02")
+    assert saved_debt["total_interest_paid"] == Decimal("23.46")
+
+
 def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     workbook_path = tmp_path / "plan.xlsx"
     summaries = [
@@ -214,7 +258,7 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     ]
     assert len(workbook["Dashboard"]._charts) == 2
     assert workbook["Dashboard"]["A12"].value == "Estimated Debt-Free Date"
-    assert workbook["Dashboard"]["B14"].value == 25.0
+    assert money(workbook["Dashboard"]["B14"].value) == Decimal("25.00")
     assert workbook["Dashboard"].freeze_panes == "A4"
     assert workbook["Dashboard"]._charts[0].x_axis.number_format.formatCode == "@"
     assert workbook["Dashboard"]._charts[0].x_axis.tickLblSkip == 1

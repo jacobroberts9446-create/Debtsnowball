@@ -151,8 +151,8 @@ def test_original_debts_are_not_mutated():
         [ScenarioDefinition(name="Extra", extra_per_paycheck=Decimal("100.00"))],
     ).compare()
 
-    assert original_debt.balance == 300.0
-    assert original_debt.total_paid == 0.0
+    assert original_debt.balance == Decimal("300.00")
+    assert original_debt.total_paid == Decimal("0.00")
 
 
 def test_original_savings_is_not_mutated():
@@ -165,7 +165,7 @@ def test_original_savings_is_not_mutated():
 
     ScenarioEngine(config, [ScenarioDefinition(name="Extra")]).compare()
 
-    assert config.settings.starting_savings == 0.0
+    assert config.settings.starting_savings == Decimal("0.00")
 
 
 def test_original_configuration_is_not_mutated_by_start_overrides():
@@ -183,7 +183,7 @@ def test_original_configuration_is_not_mutated_by_start_overrides():
         forecast_start_date=date(2026, 2, 1),
     ).compare()
 
-    assert config.settings.starting_savings == 0.0
+    assert config.settings.starting_savings == Decimal("0.00")
     assert config.settings.first_paycheck == date(2026, 1, 1)
 
 

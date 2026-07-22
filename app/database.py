@@ -6,10 +6,11 @@ SQLite persistence for generated DebtSnowball plans.
 
 import sqlite3
 from contextlib import closing
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.money import excel_number
+from app.money import excel_number, money
 
 
 class Database:
@@ -122,4 +123,73 @@ class Database:
 
     def _storage_number(self, value: object) -> float:
         """Convert money to the existing SQLite REAL storage boundary."""
+        # SQLite remains REAL-backed in Phase 2; normalize on both write and read.
         return excel_number(value)
+
+    def _loaded_money(self, value: object) -> Decimal:
+        """Normalize a SQLite REAL value back to Decimal money."""
+        return money(value)
+
+    def load_paychecks(self) -> list[dict[str, Any]]:
+        """Return stored paycheck rows with money fields normalized to Decimal."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    pay_date,
+                    income,
+                    bills_paid,
+                    debt_minimums,
+                    snowball_payment,
+                    savings_added,
+                    checking_remaining,
+                    notes
+                FROM paychecks
+                ORDER BY pay_date
+                """
+            ).fetchall()
+
+        return [
+            {
+                "pay_date": row[0],
+                "income": self._loaded_money(row[1]),
+                "bills_paid": self._loaded_money(row[2]),
+                "debt_minimums": self._loaded_money(row[3]),
+                "snowball_payment": self._loaded_money(row[4]),
+                "savings_added": self._loaded_money(row[5]),
+                "checking_remaining": self._loaded_money(row[6]),
+                "notes": row[7],
+            }
+            for row in rows
+        ]
+
+    def load_debts(self) -> list[dict[str, Any]]:
+        """Return stored debt rows with money fields normalized to Decimal."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    name,
+                    balance,
+                    apr,
+                    minimum_payment,
+                    total_paid,
+                    total_interest_paid,
+                    status
+                FROM debts
+                ORDER BY name
+                """
+            ).fetchall()
+
+        return [
+            {
+                "name": row[0],
+                "balance": self._loaded_money(row[1]),
+                "apr": row[2],
+                "minimum": self._loaded_money(row[3]),
+                "total_paid": self._loaded_money(row[4]),
+                "total_interest_paid": self._loaded_money(row[5]),
+                "status": row[6],
+            }
+            for row in rows
+        ]

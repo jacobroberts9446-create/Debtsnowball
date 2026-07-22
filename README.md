@@ -383,6 +383,39 @@ DebtSnowball/
 
 ---
 
+## Money Handling
+
+DebtSnowball uses Python `Decimal` values for financial calculations. Money is
+rounded to cents with `ROUND_HALF_UP` through the centralized helpers in
+`app/money.py`.
+
+Preferred configuration format for money is a quoted string:
+
+```json
+{
+  "amount": "215.00"
+}
+```
+
+JSON numbers remain supported for backward compatibility, but new monetary
+fields should use strings to preserve exact decimal intent.
+
+Project money rules:
+
+- Financial calculations must remain `Decimal`.
+- New money fields should be normalized with `money()`.
+- User-facing currency should use `format_currency()`.
+- JSON output serializes `Decimal` money as fixed two-decimal strings, such as `"215.00"`.
+- `Decimal("-0.00")` is normalized to `Decimal("0.00")`.
+- A remaining debt balance of exactly `$0.01` is treated as paid; `$0.02` is not forgiven.
+- Excel receives numeric values only at the writer boundary through `excel_number()`.
+- SQLite currently stores money in the existing `REAL` columns for compatibility. Values are normalized back to two-decimal `Decimal` immediately after loading.
+
+The SQLite `REAL` storage format is a known Phase 2 limitation. A future Phase 3
+migration should move persisted money to integer cents or fixed-point text.
+
+---
+
 ## Testing
 
 DebtSnowball uses `pytest` for automated testing.

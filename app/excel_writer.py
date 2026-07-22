@@ -79,7 +79,8 @@ class ExcelWriter:
         sheet: Worksheet,
         summaries: list[PayPeriodSummary],
     ) -> None:
-        sheet.append(
+        self._append_row(
+            sheet,
             [
                 "Pay Date",
                 "Start Date",
@@ -109,7 +110,8 @@ class ExcelWriter:
 
         for summary in summaries:
             active_debt_total = self._active_debt_total(summary)
-            sheet.append(
+            self._append_row(
+                sheet,
                 [
                     summary.pay_date,
                     summary.start_date,
@@ -166,11 +168,12 @@ class ExcelWriter:
         sheet: Worksheet,
         summaries: list[PayPeriodSummary],
     ) -> None:
-        sheet.append(["Pay Date", "Debt", "Balance", "Minimum", "Status"])
+        self._append_row(sheet, ["Pay Date", "Debt", "Balance", "Minimum", "Status"])
 
         for summary in summaries:
             for debt in summary.active_debt_balances:
-                sheet.append(
+                self._append_row(
+                    sheet,
                     [
                         summary.pay_date,
                         debt.name,
@@ -187,7 +190,7 @@ class ExcelWriter:
         sheet: Worksheet,
         summaries: list[PayPeriodSummary],
     ) -> None:
-        sheet.append(["Pay Date", "Debt", "Balance", "Minimum", "Status"])
+        self._append_row(sheet, ["Pay Date", "Debt", "Balance", "Minimum", "Status"])
 
         seen = set()
         for summary in summaries:
@@ -196,7 +199,8 @@ class ExcelWriter:
                     continue
 
                 seen.add(debt.name)
-                sheet.append(
+                self._append_row(
+                    sheet,
                     [
                         summary.pay_date,
                         debt.name,
@@ -220,7 +224,8 @@ class ExcelWriter:
             self._write_savings_plan_sections(sheet, forecast, summaries)
             return
 
-        sheet.append(
+        self._append_row(
+            sheet,
             [
                 "Pay Date",
                 "Savings Deposit",
@@ -236,7 +241,8 @@ class ExcelWriter:
                 summary.savings_goal - summary.savings_balance,
                 ZERO_MONEY,
             )
-            sheet.append(
+            self._append_row(
+                sheet,
                 [
                     summary.pay_date,
                     summary.savings_contribution,
@@ -279,7 +285,8 @@ class ExcelWriter:
         ]
         self._write_header(sheet, 3, summary_headers)
         for row_index, stage in enumerate(forecast.savings_stage_results, start=4):
-            sheet.append(
+            self._append_row(
+                sheet,
                 [
                     stage.goal_name,
                     stage.start_date,
@@ -322,7 +329,8 @@ class ExcelWriter:
             forecast.planned_withdrawal_results,
             start=withdrawal_header_row + 1,
         ):
-            sheet.append(
+            self._append_row(
+                sheet,
                 [
                     withdrawal.name,
                     withdrawal.scheduled_date,
@@ -366,7 +374,8 @@ class ExcelWriter:
         ]
         self._write_header(sheet, detail_header_row, detail_headers)
         for row_index, summary in enumerate(summaries, start=detail_header_row + 1):
-            sheet.append(
+            self._append_row(
+                sheet,
                 [
                     summary.pay_date,
                     summary.active_savings_goal_name,
@@ -676,8 +685,8 @@ class ExcelWriter:
             return [
                 ("Best Scenario", "No scenario completed within horizon", "@"),
                 ("Earliest Debt-Free Date", None, "mmm d, yyyy"),
-                ("Maximum Interest Saved", 0.0, "$#,##0.00"),
-                ("Extra Payment Required", 0.0, "$#,##0.00"),
+                ("Maximum Interest Saved", self._cell_value(ZERO_MONEY), "$#,##0.00"),
+                ("Extra Payment Required", self._cell_value(ZERO_MONEY), "$#,##0.00"),
             ]
 
         baseline = scenario_comparison.baseline.forecast
@@ -908,13 +917,13 @@ class ExcelWriter:
             if savings_goal_days_changed is not None
             else None,
             self._cell_value(forecast.total_interest_paid),
-            0.0
+            self._cell_value(ZERO_MONEY)
             if is_baseline
             else self._cell_value(
                 baseline.total_interest_paid - forecast.total_interest_paid
             ),
             self._cell_value(forecast.total_snowball_payments),
-            0.0
+            self._cell_value(ZERO_MONEY)
             if is_baseline
             else self._cell_value(
                 forecast.total_snowball_payments - baseline.total_snowball_payments
@@ -1314,11 +1323,19 @@ class ExcelWriter:
             return [
                 ("Estimated Debt-Free Date", None, "mmm d, yyyy"),
                 ("Estimated Savings Goal Date", None, "mmm d, yyyy"),
-                ("Remaining Debt", 0.0, "$#,##0.00"),
-                ("Ending Savings", 0.0, "$#,##0.00"),
-                ("Total Interest Remaining", 0.0, "$#,##0.00"),
-                ("Total Future Minimum Payments", 0.0, "$#,##0.00"),
-                ("Total Future Snowball Payments", 0.0, "$#,##0.00"),
+                ("Remaining Debt", self._cell_value(ZERO_MONEY), "$#,##0.00"),
+                ("Ending Savings", self._cell_value(ZERO_MONEY), "$#,##0.00"),
+                ("Total Interest Remaining", self._cell_value(ZERO_MONEY), "$#,##0.00"),
+                (
+                    "Total Future Minimum Payments",
+                    self._cell_value(ZERO_MONEY),
+                    "$#,##0.00",
+                ),
+                (
+                    "Total Future Snowball Payments",
+                    self._cell_value(ZERO_MONEY),
+                    "$#,##0.00",
+                ),
             ]
 
         return [
@@ -1587,6 +1604,10 @@ class ExcelWriter:
         return money(
             sum((debt.balance for debt in summary.active_debt_balances), ZERO_MONEY)
         )
+
+    def _append_row(self, sheet: Worksheet, values: list[object]) -> None:
+        """Append a row while converting Decimal money at the Excel boundary."""
+        sheet.append([self._cell_value(value) for value in values])
 
     def _cell_value(self, value: object) -> object:
         if hasattr(value, "quantize"):

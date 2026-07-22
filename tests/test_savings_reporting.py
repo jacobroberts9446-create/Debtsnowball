@@ -18,6 +18,7 @@ from app.models import (
     SavingsGoalStage,
     SavingsPlan,
 )
+from app.money import money
 
 
 def make_config():
@@ -139,15 +140,15 @@ def test_current_plan_workbook_preserves_disabled_deadline_priority(tmp_path):
     savings = workbook["Savings Progress"]
 
     assert value_for_header(pay_periods, "Savings Goal", 2) is None
-    assert value_for_header(pay_periods, "Bills Paid", 2) == 766
-    assert value_for_header(pay_periods, "Savings Deposit", 2) == 215
-    assert value_for_header(pay_periods, "Snowball Redirected To Savings", 2) == 0
-    assert value_for_header(pay_periods, "Personal Expense Reduction", 2) == 0
-    assert value_for_header(pay_periods, "Snowball Payment", 2) == 215
-    assert value_for_header(pay_periods, "Savings Deposit", 3) == 568.5
-    assert value_for_header(pay_periods, "Snowball Payment", 3) == 568.5
+    assert money(value_for_header(pay_periods, "Bills Paid", 2)) == Decimal("766.00")
+    assert money(value_for_header(pay_periods, "Savings Deposit", 2)) == Decimal("215.00")
+    assert money(value_for_header(pay_periods, "Snowball Redirected To Savings", 2)) == Decimal("0.00")
+    assert money(value_for_header(pay_periods, "Personal Expense Reduction", 2)) == Decimal("0.00")
+    assert money(value_for_header(pay_periods, "Snowball Payment", 2)) == Decimal("215.00")
+    assert money(value_for_header(pay_periods, "Savings Deposit", 3)) == Decimal("568.50")
+    assert money(value_for_header(pay_periods, "Snowball Payment", 3)) == Decimal("568.50")
     assert savings["A1"].value == "Pay Date"
-    assert savings["B2"].value == 215
+    assert money(savings["B2"].value) == Decimal("215.00")
     workbook.close()
 
 
@@ -166,18 +167,18 @@ def test_enabled_current_plan_workbook_reports_temporary_deadline_goal(tmp_path)
     pay_periods = workbook["Pay Period Summaries"]
     savings = workbook["Savings Progress"]
 
-    assert value_for_header(pay_periods, "Bills Paid", 2) == 766
-    assert value_for_header(pay_periods, "Savings Deposit", 2) == 430
-    assert value_for_header(pay_periods, "Snowball Redirected To Savings", 2) == 215
-    assert value_for_header(pay_periods, "Personal Expense Reduction", 2) == 0
-    assert value_for_header(pay_periods, "Snowball Payment", 2) == 0
-    assert value_for_header(pay_periods, "Savings Deposit", 3) == 470
-    assert value_for_header(pay_periods, "Snowball Payment", 3) == 667
+    assert money(value_for_header(pay_periods, "Bills Paid", 2)) == Decimal("766.00")
+    assert money(value_for_header(pay_periods, "Savings Deposit", 2)) == Decimal("430.00")
+    assert money(value_for_header(pay_periods, "Snowball Redirected To Savings", 2)) == Decimal("215.00")
+    assert money(value_for_header(pay_periods, "Personal Expense Reduction", 2)) == Decimal("0.00")
+    assert money(value_for_header(pay_periods, "Snowball Payment", 2)) == Decimal("0.00")
+    assert money(value_for_header(pay_periods, "Savings Deposit", 3)) == Decimal("470.00")
+    assert money(value_for_header(pay_periods, "Snowball Payment", 3)) == Decimal("667.00")
     assert value_for_header(pay_periods, "Active Debt Total", 4) > 0
     assert savings["A4"].value == "August withdrawal"
-    assert savings["I4"].value == 2400
-    assert savings["J4"].value == 0
+    assert money(savings["I4"].value) == Decimal("2400.00")
+    assert money(savings["J4"].value) == Decimal("0.00")
     assert savings["L4"].value == "Yes"
-    assert savings["E8"].value == 2400
-    assert savings["G8"].value == 0
+    assert money(savings["E8"].value) == Decimal("2400.00")
+    assert money(savings["G8"].value) == Decimal("0.00")
     workbook.close()

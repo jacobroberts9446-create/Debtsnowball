@@ -44,3 +44,8 @@ def money(value: object) -> Decimal:
 def excel_number(value: object) -> float:
     """Convert money to an Excel-friendly number at the presentation boundary."""
     return float(money(value))
+
+
+def format_currency(value: object) -> str:
+    """Format a money value for user-facing text output."""
+    return f"${money(value):,.2f}"

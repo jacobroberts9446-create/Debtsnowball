@@ -145,8 +145,8 @@ def test_forecast_does_not_mutate_original_debt_objects():
 
     ForecastEngine(config).forecast()
 
-    assert debt.balance == 100.0
-    assert debt.total_paid == 0.0
+    assert debt.balance == Decimal("100.00")
+    assert debt.total_paid == Decimal("0.00")
 
 
 def test_forecast_does_not_mutate_original_savings_state():
@@ -159,7 +159,7 @@ def test_forecast_does_not_mutate_original_savings_state():
 
     ForecastEngine(config).forecast()
 
-    assert config.settings.starting_savings == 0.0
+    assert config.settings.starting_savings == Decimal("0.00")
 
 
 def test_maximum_horizon_reached_with_remaining_debt():

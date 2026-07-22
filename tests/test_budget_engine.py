@@ -3,7 +3,10 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from app.budget_engine import BudgetEngine
+from app.calendar_engine import CalendarEngine
+from app.config import Config
 from app.models import Bill, BudgetSettings, Debt, PayPeriod
+from app.money import money
 
 
 def make_config(
@@ -32,6 +35,20 @@ def make_config(
     )
 
 
+def assert_summary_reconciles(summary):
+    """Assert paycheck allocations conserve money exactly after cent rounding."""
+    personal_reduction = summary.personal_expense_reduction
+    actual_expenses = summary.bills_paid - personal_reduction
+    allocated = (
+        actual_expenses
+        + summary.debt_minimums
+        + summary.savings_contribution
+        + summary.snowball_payment
+        + summary.remaining_cash
+    )
+    assert money(summary.income - allocated) == Decimal("0.00")
+
+
 def test_savings_split_before_reaching_goal():
     config = make_config(
         paycheck=1000,
@@ -45,10 +62,11 @@ def test_savings_split_before_reaching_goal():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.savings_contribution == 500.0
-    assert summary.savings_balance == 500.0
-    assert summary.snowball_payment == 500.0
-    assert summary.remaining_cash == 0.0
+    assert summary.savings_contribution == Decimal("500.00")
+    assert summary.savings_balance == Decimal("500.00")
+    assert summary.snowball_payment == Decimal("500.00")
+    assert summary.remaining_cash == Decimal("0.00")
+    assert_summary_reconciles(summary)
 
 
 def test_savings_split_after_reaching_goal():
@@ -64,10 +82,11 @@ def test_savings_split_after_reaching_goal():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.savings_contribution == 0.0
-    assert summary.savings_balance == 1000.0
-    assert summary.snowball_payment == 1000.0
-    assert summary.remaining_cash == 0.0
+    assert summary.savings_contribution == Decimal("0.00")
+    assert summary.savings_balance == Decimal("1000.00")
+    assert summary.snowball_payment == Decimal("1000.00")
+    assert summary.remaining_cash == Decimal("0.00")
+    assert_summary_reconciles(summary)
 
 
 def test_budget_engine_pay_period_calculations():
@@ -84,13 +103,14 @@ def test_budget_engine_pay_period_calculations():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 100.0
-    assert summary.debt_minimums == 100.0
-    assert summary.savings_contribution == 300.0
-    assert summary.savings_balance == 500.0
-    assert summary.snowball_payment == 500.0
-    assert summary.remaining_cash == 0.0
-    assert summary.active_debt_balances[0].balance == 400.0
+    assert summary.bills_paid == Decimal("100.00")
+    assert summary.debt_minimums == Decimal("100.00")
+    assert summary.savings_contribution == Decimal("300.00")
+    assert summary.savings_balance == Decimal("500.00")
+    assert summary.snowball_payment == Decimal("500.00")
+    assert summary.remaining_cash == Decimal("0.00")
+    assert summary.active_debt_balances[0].balance == Decimal("400.00")
+    assert_summary_reconciles(summary)
 
 
 def test_budget_engine_handles_empty_bill_list():
@@ -106,10 +126,11 @@ def test_budget_engine_handles_empty_bill_list():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 0.0
-    assert summary.debt_minimums == 50.0
-    assert summary.snowball_payment == 450.0
-    assert summary.remaining_cash == 0.0
+    assert summary.bills_paid == Decimal("0.00")
+    assert summary.debt_minimums == Decimal("50.00")
+    assert summary.snowball_payment == Decimal("450.00")
+    assert summary.remaining_cash == Decimal("0.00")
+    assert_summary_reconciles(summary)
 
 
 def test_budget_engine_handles_empty_debt_list():
@@ -124,11 +145,12 @@ def test_budget_engine_handles_empty_debt_list():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 100.0
-    assert summary.debt_minimums == 0.0
-    assert summary.savings_contribution == 100.0
-    assert summary.snowball_payment == 0.0
-    assert summary.remaining_cash == 300.0
+    assert summary.bills_paid == Decimal("100.00")
+    assert summary.debt_minimums == Decimal("0.00")
+    assert summary.savings_contribution == Decimal("100.00")
+    assert summary.snowball_payment == Decimal("0.00")
+    assert summary.remaining_cash == Decimal("300.00")
+    assert_summary_reconciles(summary)
     assert summary.active_debt_balances == []
 
 
@@ -146,11 +168,12 @@ def test_budget_engine_zero_paycheck():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 100.0
-    assert summary.debt_minimums == 50.0
-    assert summary.savings_contribution == 0.0
-    assert summary.snowball_payment == 0.0
-    assert summary.remaining_cash == -150.0
+    assert summary.bills_paid == Decimal("100.00")
+    assert summary.debt_minimums == Decimal("50.00")
+    assert summary.savings_contribution == Decimal("0.00")
+    assert summary.snowball_payment == Decimal("0.00")
+    assert summary.remaining_cash == Decimal("-150.00")
+    assert_summary_reconciles(summary)
 
 
 def test_budget_engine_paycheck_smaller_than_minimum_payments():
@@ -166,10 +189,11 @@ def test_budget_engine_paycheck_smaller_than_minimum_payments():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.debt_minimums == 100.0
-    assert summary.savings_contribution == 0.0
-    assert summary.snowball_payment == 0.0
-    assert summary.remaining_cash == -25.0
+    assert summary.debt_minimums == Decimal("100.00")
+    assert summary.savings_contribution == Decimal("0.00")
+    assert summary.snowball_payment == Decimal("0.00")
+    assert summary.remaining_cash == Decimal("-25.00")
+    assert_summary_reconciles(summary)
 
 
 def test_savings_goal_reached_mid_pay_period_sends_rest_to_snowball():
@@ -185,10 +209,11 @@ def test_savings_goal_reached_mid_pay_period_sends_rest_to_snowball():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.savings_contribution == 100.0
-    assert summary.savings_balance == 1000.0
-    assert summary.snowball_payment == 900.0
-    assert summary.remaining_cash == 0.0
+    assert summary.savings_contribution == Decimal("100.00")
+    assert summary.savings_balance == Decimal("1000.00")
+    assert summary.snowball_payment == Decimal("900.00")
+    assert summary.remaining_cash == Decimal("0.00")
+    assert_summary_reconciles(summary)
 
 
 def test_budget_engine_build_plan_preserves_running_state_regression():
@@ -207,10 +232,10 @@ def test_budget_engine_build_plan_preserves_running_state_regression():
 
     summaries = BudgetEngine(config).build_plan(periods)
 
-    assert summaries[0].savings_contribution == 250.0
-    assert summaries[0].snowball_payment == 250.0
-    assert summaries[1].savings_contribution == 0.0
-    assert summaries[1].snowball_payment == 500.0
+    assert summaries[0].savings_contribution == Decimal("250.00")
+    assert summaries[0].snowball_payment == Decimal("250.00")
+    assert summaries[1].savings_contribution == Decimal("0.00")
+    assert summaries[1].snowball_payment == Decimal("500.00")
 
 
 def test_per_paycheck_expenses_reduce_surplus():
@@ -227,9 +252,10 @@ def test_per_paycheck_expenses_reduce_surplus():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 350.0
-    assert summary.snowball_payment == 650.0
-    assert summary.remaining_cash == 0.0
+    assert summary.bills_paid == Decimal("350.00")
+    assert summary.snowball_payment == Decimal("650.00")
+    assert summary.remaining_cash == Decimal("0.00")
+    assert_summary_reconciles(summary)
 
 
 def test_savings_contribution_uses_cash_after_per_paycheck_expenses():
@@ -246,8 +272,9 @@ def test_savings_contribution_uses_cash_after_per_paycheck_expenses():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.savings_contribution == 325.0
-    assert summary.snowball_payment == 325.0
+    assert summary.savings_contribution == Decimal("325.00")
+    assert summary.snowball_payment == Decimal("325.00")
+    assert_summary_reconciles(summary)
 
 
 def test_snowball_uses_cash_after_per_paycheck_expenses_and_monthly_bills():
@@ -265,8 +292,9 @@ def test_snowball_uses_cash_after_per_paycheck_expenses_and_monthly_bills():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 450.0
-    assert summary.snowball_payment == 550.0
+    assert summary.bills_paid == Decimal("450.00")
+    assert summary.snowball_payment == Decimal("550.00")
+    assert_summary_reconciles(summary)
 
 
 def test_zero_per_paycheck_expenses_preserve_existing_behavior():
@@ -283,9 +311,10 @@ def test_zero_per_paycheck_expenses_preserve_existing_behavior():
 
     summary = BudgetEngine(config).process_pay_period(period)
 
-    assert summary.bills_paid == 0.0
-    assert summary.savings_contribution == 500.0
-    assert summary.snowball_payment == 500.0
+    assert summary.bills_paid == Decimal("0.00")
+    assert summary.savings_contribution == Decimal("500.00")
+    assert summary.snowball_payment == Decimal("500.00")
+    assert_summary_reconciles(summary)
 
 
 def test_minimum_reservation_accounts_for_interest_before_payoff():
@@ -311,4 +340,27 @@ def test_minimum_reservation_accounts_for_interest_before_payoff():
 
     assert summary.debt_minimums == Decimal("23.46")
     assert summary.snowball_payment == Decimal("76.54")
-    assert summary.remaining_cash == 0.0
+    assert summary.remaining_cash == Decimal("0.00")
+    assert_summary_reconciles(summary)
+
+
+def test_live_plan_reconciles_normal_high_expense_payoff_and_partial_periods():
+    config = Config().load("config.json")
+    periods = CalendarEngine(config.settings).generate(date(2026, 12, 31))
+    summaries = BudgetEngine(config).build_plan(periods)
+
+    for index in [0, 1, 5, -1]:
+        assert_summary_reconciles(summaries[index])
+
+
+def test_enabled_deadline_priority_reconciles_withdrawal_and_post_withdrawal_periods():
+    config = Config().load("config.json")
+    config.savings_plan.deadline_priority_enabled = True
+    periods = CalendarEngine(config.settings).generate(date(2026, 8, 28))
+    summaries = BudgetEngine(config).build_plan(periods)
+
+    for summary in summaries[:4]:
+        assert_summary_reconciles(summary)
+
+    assert summaries[2].planned_withdrawal_amount == Decimal("2400.00")
+    assert summaries[2].snowball_payment == Decimal("215.00")
