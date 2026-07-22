@@ -1,14 +1,32 @@
 """Tests for the interactive run.py menu."""
 
 from argparse import Namespace
+import re
 from types import SimpleNamespace
 
 import run
+
+ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
 def output_text(output: list[str]) -> str:
     """Join captured console output for readable substring assertions."""
     return "\n".join(output)
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escapes from captured output."""
+    return ANSI_RE.sub("", text)
+
+
+class FakeStream:
+    """Small stream fake for ANSI auto-detection tests."""
+
+    def __init__(self, is_tty: bool) -> None:
+        self.is_tty = is_tty
+
+    def isatty(self) -> bool:
+        return self.is_tty
 
 
 class FakePlanHistoryService:
@@ -86,6 +104,106 @@ class FakePlanHistoryService:
             raise self.restore_error
         self.restored_version.source_version_id = version_id
         return self.restored_version
+
+
+def test_style_text_adds_ansi_and_reset_when_color_enabled() -> None:
+    """Explicitly enabled styles wrap text with ANSI and reset."""
+    styled = run.success_text("Success: Done", enable_color=True)
+
+    assert styled.startswith("\033[32m")
+    assert styled.endswith(run.ANSI_RESET)
+    assert strip_ansi(styled) == "Success: Done"
+
+
+def test_style_text_returns_plain_text_when_color_disabled() -> None:
+    """Disabled color returns script-friendly plain text."""
+    assert run.error_text("Error: Nope", enable_color=False) == "Error: Nope"
+
+
+def test_no_color_takes_precedence_over_force_on(monkeypatch) -> None:
+    """NO_COLOR disables color even when DEBTSNOWBALL_COLOR is forced on."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("DEBTSNOWBALL_COLOR", "1")
+
+    assert not run.ansi_color_enabled(
+        FakeStream(True),
+        {"NO_COLOR": "1", "DEBTSNOWBALL_COLOR": "1"},
+    )
+
+
+def test_debtsnowball_color_force_on(monkeypatch) -> None:
+    """DEBTSNOWBALL_COLOR=1 forces ANSI output on."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("DEBTSNOWBALL_COLOR", "1")
+
+    assert run.warning_text("Warning: Careful").startswith("\033[33m")
+
+
+def test_debtsnowball_color_force_off(monkeypatch) -> None:
+    """DEBTSNOWBALL_COLOR=0 forces ANSI output off."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("DEBTSNOWBALL_COLOR", "0")
+
+    assert run.success_text("Success: Done") == "Success: Done"
+
+
+def test_color_disabled_for_non_tty_output() -> None:
+    """Non-TTY output disables color automatically."""
+    enabled = run.ansi_color_enabled(FakeStream(False), {"TERM": "xterm-256color"})
+
+    assert not enabled
+
+
+def test_color_disabled_for_unsupported_terminal() -> None:
+    """Unsupported terminal declarations disable automatic color."""
+    enabled = run.ansi_color_enabled(FakeStream(True), {"TERM": "dumb"})
+
+    assert not enabled
+
+
+def test_format_helpers_style_success_warning_error_and_headings(monkeypatch) -> None:
+    """Formatting helpers use the centralized styling layer."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("DEBTSNOWBALL_COLOR", "1")
+    output = []
+
+    run.print_success("Saved.", output.append)
+    run.print_warning("Review.", output.append)
+    run.print_error("Failed.", output.append)
+    run.print_menu_title("Menu", output.append)
+
+    text = output_text(output)
+    assert "\033[32mSuccess: Saved.\033[0m" in text
+    assert "\033[33mWarning: Review.\033[0m" in text
+    assert "\033[31mError: Failed.\033[0m" in text
+    assert "\033[96mMenu\033[0m" in text
+    assert strip_ansi(text).splitlines() == [
+        "Success: Saved.",
+        "Warning: Review.",
+        "Error: Failed.",
+        "",
+        "Menu",
+        "----",
+    ]
+
+
+def test_no_ansi_leakage_when_output_is_captured(monkeypatch) -> None:
+    """Captured test output remains plain text unless color is forced."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("DEBTSNOWBALL_COLOR", raising=False)
+    output = []
+
+    run.print_success("Saved.", output.append)
+    run.print_warning("Review.", output.append)
+    run.print_error("Failed.", output.append)
+    run.print_menu_title("Menu", output.append)
+
+    text = output_text(output)
+    assert "\033[" not in text
+    assert "Success: Saved." in text
+    assert "Warning: Review." in text
+    assert "Error: Failed." in text
+    assert "Menu" in text
 
 
 def test_menu_generate_budget_plan_runs_existing_workflow_once() -> None:
