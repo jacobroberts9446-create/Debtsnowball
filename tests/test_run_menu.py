@@ -4,6 +4,7 @@ from argparse import Namespace
 import re
 from types import SimpleNamespace
 
+from app import console
 import run
 
 ANSI_RE = re.compile(r"\033\[[0-9;]*m")
@@ -154,16 +155,16 @@ class FakePreferences:
 
 def test_style_text_adds_ansi_and_reset_when_color_enabled() -> None:
     """Explicitly enabled styles wrap text with ANSI and reset."""
-    styled = run.success_text("Success: Done", enable_color=True)
+    styled = console.success_text("Success: Done", enable_color=True)
 
     assert styled.startswith("\033[32m")
-    assert styled.endswith(run.ANSI_RESET)
+    assert styled.endswith(console.ANSI_RESET)
     assert strip_ansi(styled) == "Success: Done"
 
 
 def test_style_text_returns_plain_text_when_color_disabled() -> None:
     """Disabled color returns script-friendly plain text."""
-    assert run.error_text("Error: Nope", enable_color=False) == "Error: Nope"
+    assert console.error_text("Error: Nope", enable_color=False) == "Error: Nope"
 
 
 def test_no_color_takes_precedence_over_force_on(monkeypatch) -> None:
@@ -171,7 +172,7 @@ def test_no_color_takes_precedence_over_force_on(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.setenv("DEBTSNOWBALL_COLOR", "1")
 
-    assert not run.ansi_color_enabled(
+    assert not console.ansi_color_enabled(
         FakeStream(True),
         {"NO_COLOR": "1", "DEBTSNOWBALL_COLOR": "1"},
     )
@@ -182,7 +183,7 @@ def test_debtsnowball_color_force_on(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("DEBTSNOWBALL_COLOR", "1")
 
-    assert run.warning_text("Warning: Careful").startswith("\033[33m")
+    assert console.warning_text("Warning: Careful").startswith("\033[33m")
 
 
 def test_debtsnowball_color_force_off(monkeypatch) -> None:
@@ -190,19 +191,19 @@ def test_debtsnowball_color_force_off(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("DEBTSNOWBALL_COLOR", "0")
 
-    assert run.success_text("Success: Done") == "Success: Done"
+    assert console.success_text("Success: Done") == "Success: Done"
 
 
 def test_color_disabled_for_non_tty_output() -> None:
     """Non-TTY output disables color automatically."""
-    enabled = run.ansi_color_enabled(FakeStream(False), {"TERM": "xterm-256color"})
+    enabled = console.ansi_color_enabled(FakeStream(False), {"TERM": "xterm-256color"})
 
     assert not enabled
 
 
 def test_color_disabled_for_unsupported_terminal() -> None:
     """Unsupported terminal declarations disable automatic color."""
-    enabled = run.ansi_color_enabled(FakeStream(True), {"TERM": "dumb"})
+    enabled = console.ansi_color_enabled(FakeStream(True), {"TERM": "dumb"})
 
     assert not enabled
 
@@ -213,10 +214,10 @@ def test_format_helpers_style_success_warning_error_and_headings(monkeypatch) ->
     monkeypatch.setenv("DEBTSNOWBALL_COLOR", "1")
     output = []
 
-    run.print_success("Saved.", output.append)
-    run.print_warning("Review.", output.append)
-    run.print_error("Failed.", output.append)
-    run.print_menu_title("Menu", output.append)
+    console.print_success("Saved.", output.append)
+    console.print_warning("Review.", output.append)
+    console.print_error("Failed.", output.append)
+    console.print_menu_title("Menu", output.append)
 
     text = output_text(output)
     assert "\033[32mSuccess: Saved.\033[0m" in text
@@ -239,10 +240,10 @@ def test_no_ansi_leakage_when_output_is_captured(monkeypatch) -> None:
     monkeypatch.delenv("DEBTSNOWBALL_COLOR", raising=False)
     output = []
 
-    run.print_success("Saved.", output.append)
-    run.print_warning("Review.", output.append)
-    run.print_error("Failed.", output.append)
-    run.print_menu_title("Menu", output.append)
+    console.print_success("Saved.", output.append)
+    console.print_warning("Review.", output.append)
+    console.print_error("Failed.", output.append)
+    console.print_menu_title("Menu", output.append)
 
     text = output_text(output)
     assert "\033[" not in text
