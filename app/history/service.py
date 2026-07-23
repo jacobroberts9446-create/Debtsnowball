@@ -15,6 +15,7 @@ from typing import Any
 
 from app.database import Database, LATEST_SCHEMA_VERSION
 from app.budget_engine import PayPeriodSummary
+from app.history.repository import HistoryRepository
 from app.money import from_cents, money, to_cents
 from app.models import (
     ActualEntryType,
@@ -223,8 +224,9 @@ class PlanHistoryService:
     """High-level API for durable local plan history."""
 
     def __init__(self, database: Database | str | Path = "output/debtsnowball.sqlite") -> None:
-        self.database = database if isinstance(database, Database) else Database(database)
-        self.database.initialize()
+        self.repository = HistoryRepository(database)
+        self.database = self.repository.database
+        self.repository.initialize()
 
     def create_plan(
         self,
@@ -241,31 +243,29 @@ class PlanHistoryService:
         snapshot = normalized_config_snapshot(config)
         snapshot_json = canonical_json(snapshot)
         config_hash = fingerprint(snapshot)
-        with closing(self.database._connect()) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
-            with conn:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO plans (name, description, created_at, updated_at, notes)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (name, description, timestamp, timestamp, notes),
-                )
-                plan_id = int(cursor.lastrowid)
-                version_id = self._insert_plan_version(
-                    conn,
-                    plan_id=plan_id,
-                    version_number=1,
-                    config_snapshot=snapshot_json,
-                    config_fingerprint=config_hash,
-                    change_note=change_note,
-                    source=source,
-                    active=True,
-                )
-                conn.execute(
-                    "UPDATE plans SET current_version_id = ? WHERE id = ?",
-                    (version_id, plan_id),
-                )
+        with self.repository.transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO plans (name, description, created_at, updated_at, notes)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (name, description, timestamp, timestamp, notes),
+            )
+            plan_id = int(cursor.lastrowid)
+            version_id = self._insert_plan_version(
+                conn,
+                plan_id=plan_id,
+                version_number=1,
+                config_snapshot=snapshot_json,
+                config_fingerprint=config_hash,
+                change_note=change_note,
+                source=source,
+                active=True,
+            )
+            conn.execute(
+                "UPDATE plans SET current_version_id = ? WHERE id = ?",
+                (version_id, plan_id),
+            )
         return self.get_plan(plan_id)
 
     def save_plan_version(
@@ -287,35 +287,33 @@ class PlanHistoryService:
             return versions[-1]
 
         version_number = (versions[-1].version_number if versions else 0) + 1
-        with closing(self.database._connect()) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
-            with conn:
-                if active:
-                    self._enable_plan_version_mutation(conn)
-                    conn.execute(
-                        "UPDATE plan_versions SET active = 0 WHERE plan_id = ?",
-                        (plan_id,),
-                    )
-                    self._disable_plan_version_mutation(conn)
-                version_id = self._insert_plan_version(
-                    conn,
-                    plan_id=plan_id,
-                    version_number=version_number,
-                    config_snapshot=snapshot_json,
-                    config_fingerprint=config_hash,
-                    change_note=change_note,
-                    source=source,
-                    active=active,
+        with self.repository.transaction() as conn:
+            if active:
+                self._enable_plan_version_mutation(conn)
+                conn.execute(
+                    "UPDATE plan_versions SET active = 0 WHERE plan_id = ?",
+                    (plan_id,),
                 )
-                if active:
-                    conn.execute(
-                        """
-                        UPDATE plans
-                        SET current_version_id = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (version_id, utc_timestamp(), plan_id),
-                    )
+                self._disable_plan_version_mutation(conn)
+            version_id = self._insert_plan_version(
+                conn,
+                plan_id=plan_id,
+                version_number=version_number,
+                config_snapshot=snapshot_json,
+                config_fingerprint=config_hash,
+                change_note=change_note,
+                source=source,
+                active=active,
+            )
+            if active:
+                conn.execute(
+                    """
+                    UPDATE plans
+                    SET current_version_id = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (version_id, utc_timestamp(), plan_id),
+                )
         return self.get_plan_version(version_id)
 
     def generate_and_save_forecast(
@@ -391,76 +389,23 @@ class PlanHistoryService:
 
     def list_plans(self, *, include_archived: bool = False) -> list[Plan]:
         """Return lightweight plan summaries."""
-        clause = "" if include_archived else "WHERE archived = 0"
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT id, name, description, created_at, updated_at, archived,
-                       current_version_id, notes
-                FROM plans
-                {clause}
-                ORDER BY updated_at DESC, name
-                """
-            ).fetchall()
-        return [self._plan_from_row(row) for row in rows]
+        return self.repository.list_plans(include_archived=include_archived)
 
     def get_plan(self, plan_id: int) -> Plan:
         """Return one plan by ID."""
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT id, name, description, created_at, updated_at, archived,
-                       current_version_id, notes
-                FROM plans
-                WHERE id = ?
-                """,
-                (plan_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError(f"plan {plan_id} was not found.")
-        return self._plan_from_row(row)
+        return self.repository.get_plan(plan_id)
 
     def get_plan_version(self, version_id: int) -> PlanVersion:
         """Return one immutable plan version by ID."""
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT id, plan_id, version_number, created_at, source, change_note,
-                       config_snapshot, config_fingerprint, application_version,
-                       forecast_engine_version, schema_version, active
-                FROM plan_versions
-                WHERE id = ?
-                """,
-                (version_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError(f"plan version {version_id} was not found.")
-        return self._plan_version_from_row(row)
+        return self.repository.get_plan_version(version_id)
 
     def list_plan_versions(self, plan_id: int) -> list[PlanVersion]:
         """Return immutable versions for a plan."""
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, plan_id, version_number, created_at, source, change_note,
-                       config_snapshot, config_fingerprint, application_version,
-                       forecast_engine_version, schema_version, active
-                FROM plan_versions
-                WHERE plan_id = ?
-                ORDER BY version_number
-                """,
-                (plan_id,),
-            ).fetchall()
-        return [self._plan_version_from_row(row) for row in rows]
+        return self.repository.list_plan_versions(plan_id)
 
     def archive_plan(self, plan_id: int) -> None:
         """Soft-delete a plan from normal listings."""
-        with closing(self.database._connect()) as conn:
-            with conn:
-                conn.execute(
-                    "UPDATE plans SET archived = 1, updated_at = ? WHERE id = ?",
-                    (utc_timestamp(), plan_id),
-                )
+        self.repository.archive_plan(plan_id, utc_timestamp())
 
     def restore_plan_version(self, version_id: int, *, change_note: str = "Restored") -> PlanVersion:
         """Restore an older version by creating a new immutable version."""
@@ -592,46 +537,11 @@ class PlanHistoryService:
 
     def get_balance_observation(self, observation_id: int) -> BalanceObservation:
         """Return one balance observation by ID."""
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT id, plan_id, observation_date, observation_type, debt_identifier,
-                       balance, source, note, forecast_period_id, match_method
-                FROM balance_observations
-                WHERE id = ?
-                """,
-                (observation_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError(f"balance observation {observation_id} was not found.")
-        return BalanceObservation(
-            id=row[0],
-            plan_id=row[1],
-            observation_date=date.fromisoformat(row[2]),
-            observation_type=ActualEntryType(row[3]),
-            debt_identifier=row[4],
-            balance=from_cents(row[5]),
-            source=row[6],
-            note=row[7],
-            forecast_period_id=row[8],
-            match_method=row[9],
-        )
+        return self.repository.get_balance_observation(observation_id)
 
     def get_actual_entry(self, entry_id: int) -> ActualTransaction:
         """Return one actual transaction by ID."""
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT id, plan_id, entry_date, entry_type, debt_identifier, amount,
-                       category, description, source, corrected_entry_id, note
-                FROM actual_transactions
-                WHERE id = ?
-                """,
-                (entry_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError(f"actual entry {entry_id} was not found.")
-        return self._actual_from_row(row)
+        return self.repository.get_actual_entry(entry_id)
 
     def compare_forecast_to_actual(self, plan_id: int) -> ForecastActualComparison:
         """Compare persisted forecast totals with posted actual totals."""
@@ -1122,64 +1032,15 @@ class PlanHistoryService:
 
     def list_actual_entries(self, plan_id: int) -> list[ActualTransaction]:
         """Return actual entries for a plan ordered by date and ID."""
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, plan_id, entry_date, entry_type, debt_identifier, amount,
-                       category, description, source, corrected_entry_id, note
-                FROM actual_transactions
-                WHERE plan_id = ?
-                ORDER BY entry_date, id
-                """,
-                (plan_id,),
-            ).fetchall()
-        return [self._actual_from_row(row) for row in rows]
+        return self.repository.list_actual_entries(plan_id)
 
     def list_balance_observations(self, plan_id: int) -> list[BalanceObservation]:
         """Return balance observations for a plan ordered by date and ID."""
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT id, plan_id, observation_date, observation_type, debt_identifier,
-                       balance, source, note, forecast_period_id, match_method
-                FROM balance_observations
-                WHERE plan_id = ?
-                ORDER BY observation_date, id
-                """,
-                (plan_id,),
-            ).fetchall()
-        return [
-            BalanceObservation(
-                id=row[0],
-                plan_id=row[1],
-                observation_date=date.fromisoformat(row[2]),
-                observation_type=ActualEntryType(row[3]),
-                debt_identifier=row[4],
-                balance=from_cents(row[5]),
-                source=row[6],
-                note=row[7],
-                forecast_period_id=row[8],
-                match_method=row[9],
-            )
-            for row in rows
-        ]
+        return self.repository.list_balance_observations(plan_id)
 
     def get_forecast_snapshot(self, snapshot_id: int) -> ForecastSnapshotRecord:
         """Return a persisted forecast snapshot record."""
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT id, plan_version_id, forecast_fingerprint, debt_free_date,
-                       total_projected_interest, starting_debt, ending_debt,
-                       starting_savings, ending_savings, warning_count
-                FROM forecast_snapshots
-                WHERE id = ?
-                """,
-                (snapshot_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError(f"forecast snapshot {snapshot_id} was not found.")
-        return self._snapshot_from_row(row)
+        return self.repository.get_forecast_snapshot(snapshot_id)
 
     def _insert_plan_version(
         self,
@@ -1193,38 +1054,28 @@ class PlanHistoryService:
         source: str,
         active: bool,
     ) -> int:
-        cursor = conn.execute(
-            """
-            INSERT INTO plan_versions (
-                plan_id, version_number, created_at, source, change_note,
-                config_snapshot, config_fingerprint, application_version,
-                forecast_engine_version, schema_version, active
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                plan_id,
-                version_number,
-                utc_timestamp(),
-                source,
-                change_note,
-                config_snapshot,
-                config_fingerprint,
-                APPLICATION_VERSION,
-                FORECAST_ENGINE_VERSION,
-                LATEST_SCHEMA_VERSION,
-                int(active),
-            ),
+        return self.repository.insert_plan_version(
+            conn,
+            plan_id=plan_id,
+            version_number=version_number,
+            created_at=utc_timestamp(),
+            config_snapshot=config_snapshot,
+            config_fingerprint=config_fingerprint,
+            change_note=change_note,
+            source=source,
+            application_version=APPLICATION_VERSION,
+            forecast_engine_version=FORECAST_ENGINE_VERSION,
+            schema_version=LATEST_SCHEMA_VERSION,
+            active=active,
         )
-        return int(cursor.lastrowid)
 
     def _enable_plan_version_mutation(self, conn: sqlite3.Connection) -> None:
         """Allow controlled version activation/deletion inside this transaction."""
-        conn.execute("INSERT OR IGNORE INTO plan_version_mutation_guard (id) VALUES (1)")
+        self.repository.enable_plan_version_mutation(conn)
 
     def _disable_plan_version_mutation(self, conn: sqlite3.Connection) -> None:
         """Re-enable database-level plan-version immutability triggers."""
-        conn.execute("DELETE FROM plan_version_mutation_guard WHERE id = 1")
+        self.repository.disable_plan_version_mutation(conn)
 
     def _save_forecast_periods(
         self,
@@ -1683,77 +1534,21 @@ class PlanHistoryService:
         return f"{debt_name} received its scheduled debt payment."
 
     def _plan_from_row(self, row: tuple[Any, ...]) -> Plan:
-        return Plan(
-            id=row[0],
-            name=row[1],
-            description=row[2],
-            created_at=row[3],
-            updated_at=row[4],
-            archived=bool(row[5]),
-            current_version_id=row[6],
-            notes=row[7],
-        )
+        return self.repository.plan_from_row(row)
 
     def _plan_version_from_row(self, row: tuple[Any, ...]) -> PlanVersion:
-        return PlanVersion(
-            id=row[0],
-            plan_id=row[1],
-            version_number=row[2],
-            created_at=row[3],
-            source=row[4],
-            change_note=row[5],
-            config_snapshot=row[6],
-            config_fingerprint=row[7],
-            application_version=row[8],
-            forecast_engine_version=row[9],
-            schema_version=row[10],
-            active=bool(row[11]),
-        )
+        return self.repository.plan_version_from_row(row)
 
     def _snapshot_from_row(self, row: tuple[Any, ...]) -> ForecastSnapshotRecord:
-        return ForecastSnapshotRecord(
-            id=row[0],
-            plan_version_id=row[1],
-            forecast_fingerprint=row[2],
-            debt_free_date=_optional_date(row[3]),
-            total_projected_interest=from_cents(row[4]),
-            starting_debt=from_cents(row[5]),
-            ending_debt=from_cents(row[6]),
-            starting_savings=from_cents(row[7]),
-            ending_savings=from_cents(row[8]),
-            warning_count=row[9],
-        )
+        return self.repository.snapshot_from_row(row)
 
     def _actual_from_row(self, row: tuple[Any, ...]) -> ActualTransaction:
-        return ActualTransaction(
-            id=row[0],
-            plan_id=row[1],
-            entry_date=date.fromisoformat(row[2]),
-            entry_type=ActualEntryType(row[3]),
-            debt_identifier=row[4],
-            amount=from_cents(row[5]),
-            category=row[6],
-            description=row[7],
-            source=row[8],
-            corrected_entry_id=row[9],
-            note=row[10],
-        )
+        return self.repository.actual_from_row(row)
 
     def _latest_snapshot_for_version(self, plan_version_id: int) -> ForecastSnapshotRecord:
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                """
-                SELECT id
-                FROM forecast_snapshots
-                WHERE plan_version_id = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                (plan_version_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError("plan version does not have a saved forecast snapshot.")
-        return self.get_forecast_snapshot(row[0])
+        return self.get_forecast_snapshot(
+            self.repository.latest_snapshot_id_for_version(plan_version_id)
+        )
 
     def _payoff_order(self, snapshot_id: int) -> list[str]:
         with closing(self.database._connect()) as conn:
@@ -1772,20 +1567,7 @@ class PlanHistoryService:
         return [row[0] for row in rows]
 
     def _forecast_period_rows(self, snapshot_id: int) -> list[tuple[Any, ...]]:
-        with closing(self.database._connect()) as conn:
-            return conn.execute(
-                """
-                SELECT id, sequence_number, pay_date, income, fixed_expenses,
-                       personal_allowance, personal_expenses_used,
-                       personal_expense_reduction, minimum_debt_payments,
-                       snowball_payment, savings_deposit, savings_withdrawal,
-                       checking_remaining
-                FROM forecast_periods
-                WHERE forecast_snapshot_id = ?
-                ORDER BY sequence_number
-                """,
-                (snapshot_id,),
-            ).fetchall()
+        return self.repository.forecast_period_rows(snapshot_id)
 
     def _snapshot_debt_payments(self, snapshot_id: int) -> Decimal:
         return self._sum_snapshot_column(snapshot_id, "snowball_payment") + self._sum_snapshot_column(
@@ -1799,16 +1581,7 @@ class PlanHistoryService:
         return len(self._forecast_period_rows(snapshot_id))
 
     def _sum_snapshot_column(self, snapshot_id: int, column: str) -> Decimal:
-        with closing(self.database._connect()) as conn:
-            value = conn.execute(
-                f"""
-                SELECT COALESCE(SUM({column}), 0)
-                FROM forecast_periods
-                WHERE forecast_snapshot_id = ?
-                """,
-                (snapshot_id,),
-            ).fetchone()[0]
-        return from_cents(value)
+        return from_cents(self.repository.sum_snapshot_column(snapshot_id, column))
 
     def _first_different_period(self, earlier_snapshot_id: int, later_snapshot_id: int) -> date | None:
         earlier = self._forecast_period_rows(earlier_snapshot_id)
@@ -1876,12 +1649,7 @@ class PlanHistoryService:
         return {key: money(value) for key, value in totals.items()}
 
     def _plan_name_exists(self, name: str) -> bool:
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM plans WHERE name = ? AND archived = 0",
-                (name,),
-            ).fetchone()
-        return row is not None
+        return self.repository.plan_name_exists(name)
 
     def _match_period_for_date(self, plan_id: int, value: date) -> tuple[int | None, str]:
         plan = self.get_plan(plan_id)
@@ -2101,19 +1869,7 @@ class PlanHistoryService:
         return f"{base} Input changes include {first.category} {first.name} ({first.direction})."
 
     def _export_forecast_snapshots(self, plan_id: int) -> list[dict[str, Any]]:
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT fs.*
-                FROM forecast_snapshots fs
-                JOIN plan_versions pv ON pv.id = fs.plan_version_id
-                WHERE pv.plan_id = ?
-                ORDER BY fs.id
-                """,
-                (plan_id,),
-            ).fetchall()
-            columns = [column[0] for column in conn.execute("SELECT * FROM forecast_snapshots LIMIT 0").description]
-        return [self._export_row(columns, row) for row in rows]
+        return self.repository.export_forecast_snapshots(plan_id)
 
     def _export_forecast_periods(self, plan_id: int) -> list[dict[str, Any]]:
         return self._export_child_rows(plan_id, "forecast_periods")
@@ -2128,84 +1884,13 @@ class PlanHistoryService:
         return self._export_child_rows(plan_id, "data_quality_warnings")
 
     def _export_actual_transactions(self, plan_id: int) -> list[dict[str, Any]]:
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM actual_transactions
-                WHERE plan_id = ?
-                ORDER BY id
-                """,
-                (plan_id,),
-            ).fetchall()
-            columns = [
-                column[0]
-                for column in conn.execute(
-                    "SELECT * FROM actual_transactions LIMIT 0"
-                ).description
-            ]
-        return [self._export_row(columns, row) for row in rows]
+        return self.repository.export_actual_transactions(plan_id)
 
     def _export_balance_observations(self, plan_id: int) -> list[dict[str, Any]]:
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM balance_observations
-                WHERE plan_id = ?
-                ORDER BY id
-                """,
-                (plan_id,),
-            ).fetchall()
-            columns = [
-                column[0]
-                for column in conn.execute(
-                    "SELECT * FROM balance_observations LIMIT 0"
-                ).description
-            ]
-        return [self._export_row(columns, row) for row in rows]
+        return self.repository.export_balance_observations(plan_id)
 
     def _export_child_rows(self, plan_id: int, table: str) -> list[dict[str, Any]]:
-        join_sql = {
-            "forecast_periods": """
-                SELECT fp.*
-                FROM forecast_periods fp
-                JOIN forecast_snapshots fs ON fs.id = fp.forecast_snapshot_id
-                JOIN plan_versions pv ON pv.id = fs.plan_version_id
-                WHERE pv.plan_id = ?
-                ORDER BY fp.id
-            """,
-            "debt_snapshots": """
-                SELECT ds.*
-                FROM debt_snapshots ds
-                JOIN forecast_periods fp ON fp.id = ds.forecast_period_id
-                JOIN forecast_snapshots fs ON fs.id = fp.forecast_snapshot_id
-                JOIN plan_versions pv ON pv.id = fs.plan_version_id
-                WHERE pv.plan_id = ?
-                ORDER BY ds.id
-            """,
-            "savings_snapshots": """
-                SELECT ss.*
-                FROM savings_snapshots ss
-                JOIN forecast_periods fp ON fp.id = ss.forecast_period_id
-                JOIN forecast_snapshots fs ON fs.id = fp.forecast_snapshot_id
-                JOIN plan_versions pv ON pv.id = fs.plan_version_id
-                WHERE pv.plan_id = ?
-                ORDER BY ss.id
-            """,
-            "data_quality_warnings": """
-                SELECT w.*
-                FROM data_quality_warnings w
-                JOIN forecast_snapshots fs ON fs.id = w.forecast_snapshot_id
-                JOIN plan_versions pv ON pv.id = fs.plan_version_id
-                WHERE pv.plan_id = ?
-                ORDER BY w.id
-            """,
-        }
-        with closing(self.database._connect()) as conn:
-            rows = conn.execute(join_sql[table], (plan_id,)).fetchall()
-            columns = [column[0] for column in conn.execute(f"SELECT * FROM {table} LIMIT 0").description]
-        return [self._export_row(columns, row) for row in rows]
+        return self.repository.export_child_rows(plan_id, table)
 
     def _import_forecast_snapshots(
         self,
@@ -2493,30 +2178,6 @@ class PlanHistoryService:
         if value is None:
             return None
         return to_cents(value)
-
-    def _export_row(self, columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
-        money_columns = {
-            "income", "fixed_expenses", "personal_allowance", "personal_expenses_used",
-            "personal_expense_reduction", "minimum_debt_payments", "snowball_payment",
-            "savings_deposit", "savings_withdrawal", "checking_remaining",
-            "reconciliation_difference", "starting_balance", "interest_charged",
-            "minimum_payment", "extra_payment", "total_payment", "principal_paid",
-            "ending_balance", "scheduled_minimum_payment", "actual_minimum_payment",
-            "starting_savings", "normal_contribution", "redirected_snowball",
-            "personal_expense_reduction_contribution", "other_contribution",
-            "withdrawal", "ending_savings", "goal_target", "projected_shortfall",
-            "total_deposit", "amount_required_before", "amount_required_after",
-            "projected_deadline_balance", "withdrawal_amount", "amount",
-            "balance", "total_projected_interest", "total_projected_debt_payments",
-            "starting_debt", "ending_debt",
-        }
-        output = {}
-        for column, value in zip(columns, row, strict=True):
-            if value is not None and column in money_columns:
-                output[column] = f"{from_cents(value):.2f}"
-            else:
-                output[column] = value
-        return output
 
     def _attach_snapshot_history_fingerprints(self, payload: dict[str, Any]) -> None:
         for snapshot in payload["forecast_snapshots"]:
@@ -2858,12 +2519,7 @@ class PlanHistoryService:
 
 
     def _import_fingerprint_exists(self, import_hash: str) -> bool:
-        with closing(self.database._connect()) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM imported_plan_fingerprints WHERE import_fingerprint = ?",
-                (import_hash,),
-            ).fetchone()
-        return row is not None
+        return self.repository.import_fingerprint_exists(import_hash)
 
     def _write_csv(self, path: Path, rows: list[dict[str, Any]]) -> Path:
         fieldnames = sorted({key for row in rows for key in row}) or ["empty"]
