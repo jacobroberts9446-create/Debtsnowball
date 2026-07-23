@@ -6,7 +6,6 @@ DebtSnowball
 
 import argparse
 from copy import deepcopy
-from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
@@ -16,7 +15,6 @@ from app.config import Config
 from app.console import (
     print_application_banner,
     print_error,
-    print_menu_title,
     print_section_header,
     print_success,
     print_table,
@@ -25,6 +23,14 @@ from app.console import (
 from app.excel_writer import ExcelWriter
 from app.forecast_engine import ForecastEngine
 from app.history import PlanHistoryService
+from app.menu import (
+    InputFunc,
+    MenuOption,
+    OutputFunc,
+    display_menu,
+    run_menu,
+    wait_for_enter,
+)
 from app.models import ActualEntryType
 from app.money import format_currency
 from app.preferences import RecentPlanPreferences
@@ -32,18 +38,6 @@ from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
 APP_VERSION = "1.1.0"
-InputFunc = Callable[[str], str]
-OutputFunc = Callable[[str], None]
-MenuAction = Callable[[], bool]
-
-
-@dataclass(frozen=True)
-class MenuOption:
-    """One selectable interactive menu option."""
-
-    key: str
-    label: str
-    action: MenuAction
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -82,47 +76,16 @@ def run_main_menu(
         options=options,
         input_func=input_func,
         output_func=output_func,
+        title_renderer=render_main_menu_title,
     )
 
 
-def run_menu(
-    title: str,
-    options: list[MenuOption],
-    input_func: InputFunc = input,
+def render_main_menu_title(
+    _title: str,
     output_func: OutputFunc = print,
 ) -> None:
-    """Display a menu until an action requests exit."""
-    option_map = {option.key: option for option in options}
-    while True:
-        display_menu(title, options, output_func)
-
-        choice = input_func("Choose an option: ").strip()
-        option = option_map.get(choice)
-
-        if option is not None:
-            should_exit = option.action()
-            if should_exit:
-                return
-            continue
-
-        print_warning(f"Please choose one of: {', '.join(option_map)}.", output_func)
-
-
-def display_menu(
-    title: str,
-    options: list[MenuOption],
-    output_func: OutputFunc = print,
-) -> None:
-    """Print a numbered interactive menu."""
-    output_func("")
-    if title == f"DebtSnowball v{APP_VERSION}":
-        print_application_banner(APP_VERSION, output_func)
-    else:
-        print_menu_title(title, output_func)
-    key_width = max(len(option.key) for option in options)
-    for option in options:
-        output_func(f"{option.key.rjust(key_width)}. {option.label}")
-    output_func("")
+    """Render the application banner used by the top-level interactive menu."""
+    print_application_banner(APP_VERSION, output_func)
 
 
 def build_main_menu_options(
@@ -793,11 +756,6 @@ def show_placeholder_screen(
     output_func(message)
     wait_for_enter(input_func)
     return False
-
-
-def wait_for_enter(input_func: InputFunc = input) -> None:
-    """Wait for the user to press Enter."""
-    input_func("Press Enter to return to the main menu...")
 
 
 def exit_menu(output_func: OutputFunc = print) -> bool:
