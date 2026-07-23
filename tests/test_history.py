@@ -306,10 +306,10 @@ def test_export_import_json_and_csv_preserve_money_strings_and_duplicate_protect
     imported_snapshot = imported_service._latest_snapshot_for_version(
         imported.current_version_id
     )
-    assert len(imported_service._export_forecast_periods(imported.id)) == len(
+    assert len(imported_service._exporter().export_forecast_periods(imported.id)) == len(
         forecast.periods
     )
-    assert len(imported_service._export_debt_snapshots(imported.id)) == len(
+    assert len(imported_service._exporter().export_debt_snapshots(imported.id)) == len(
         payload["debt_snapshots"]
     )
     assert imported_service.get_forecast_snapshot(
@@ -834,7 +834,7 @@ def test_import_rejects_recomputed_tampering_and_rolls_back(tmp_path, mutate, me
     for snapshot in payload["forecast_snapshots"]:
         snapshot["history_fingerprint"] = PlanHistoryService(
             tmp_path / "unused.sqlite"
-        )._snapshot_history_fingerprint(payload, int(snapshot["id"]))
+        )._importer().snapshot_history_fingerprint(payload, int(snapshot["id"]))
     payload["portable_content_fingerprint"] = portable_content_fingerprint(payload)
     path = write_payload(tmp_path, payload, "strict-tamper.json")
     target = PlanHistoryService(tmp_path / f"strict-target-{message}.sqlite")
@@ -914,7 +914,7 @@ def test_import_validation_defensive_branches(tmp_path):
 
     def refresh(payload):
         for snapshot in payload.get("forecast_snapshots", []):
-            snapshot["history_fingerprint"] = validator._snapshot_history_fingerprint(
+            snapshot["history_fingerprint"] = validator._importer().snapshot_history_fingerprint(
                 payload,
                 int(snapshot["id"]),
             )
@@ -1015,7 +1015,7 @@ def test_import_validation_defensive_branches(tmp_path):
 
     for payload, message in cases:
         with pytest.raises(ValueError, match=message):
-            validator._validate_import_payload(payload)
+            validator._importer().validate_import_payload(payload)
 
 
 def test_plan_version_immutability_blocks_direct_sql_but_allows_service_workflows(tmp_path):
