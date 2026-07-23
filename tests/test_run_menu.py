@@ -4,6 +4,7 @@ from argparse import Namespace
 import re
 from types import SimpleNamespace
 
+from app import cli
 from app import console
 import run
 
@@ -151,6 +152,22 @@ class FakePreferences:
 
     def remove_recent(self, plan_id):
         self.recent_plans = [plan for plan in self.recent_plans if plan.id != plan_id]
+
+
+def minimal_cli_dependencies(**overrides):
+    """Build lightweight CLI dependencies for dispatcher tests."""
+    values = {
+        "load_current_config": lambda: SimpleNamespace(name="config"),
+        "save_current_plan": lambda *_args, **_kwargs: (
+            "plan",
+            SimpleNamespace(id=1, name="Plan"),
+        ),
+        "print_plan_comparison": lambda _comparison: None,
+        "write_history_report": lambda _service, _plan_id, _path: None,
+        "service_factory": FakePlanHistoryService,
+    }
+    values.update(overrides)
+    return cli.CliDependencies(**values)
 
 
 def test_style_text_adds_ansi_and_reset_when_color_enabled() -> None:
@@ -970,14 +987,17 @@ def test_main_preserves_existing_argparse_command_behavior(monkeypatch) -> None:
     """Supplying an argparse command bypasses the interactive menu."""
     calls = []
 
-    monkeypatch.setattr(run, "run_cli", lambda args: calls.append(args.command))
     monkeypatch.setattr(
-        run,
-        "run_main_menu",
-        lambda: calls.append("menu"),
+        cli,
+        "run_cli",
+        lambda args, dependencies=None: calls.append(args.command),
     )
 
-    run.main(["plan", "list"])
+    cli.main(
+        ["plan", "list"],
+        interactive_runner=lambda: calls.append("menu"),
+        dependencies=minimal_cli_dependencies(),
+    )
 
     assert calls == ["plan"]
 
@@ -989,13 +1009,17 @@ def test_run_cli_accepts_parsed_namespace_for_existing_commands(monkeypatch) -> 
     class FakeService:
         pass
 
-    monkeypatch.setattr(run, "PlanHistoryService", FakeService)
     monkeypatch.setattr(
-        run,
+        cli,
         "run_plan_command",
-        lambda _service, args: calls.append(("plan", args.plan_command)),
+        lambda _service, args, _dependencies: calls.append(
+            ("plan", args.plan_command)
+        ),
     )
 
-    run.run_cli(Namespace(command="plan", plan_command="list"))
+    cli.run_cli(
+        Namespace(command="plan", plan_command="list"),
+        dependencies=minimal_cli_dependencies(service_factory=FakeService),
+    )
 
     assert calls == [("plan", "list")]
