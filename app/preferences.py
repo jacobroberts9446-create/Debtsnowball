@@ -51,6 +51,10 @@ class RecentPlanPreferences:
         existing = [item for item in self._load() if item.id != plan.id]
         self._save([plan, *existing][:MAX_RECENT_PLANS])
 
+    def remove_recent(self, plan_id: int) -> None:
+        """Remove one plan from the recent-plan list."""
+        self._save([plan for plan in self._load() if plan.id != int(plan_id)])
+
     def _load(self) -> list[RecentPlan]:
         """Load and validate recent-plan preferences."""
         try:

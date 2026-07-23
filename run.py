@@ -336,6 +336,7 @@ def run_saved_plans_menu(
             lambda: list_recent_plans_action(
                 service,
                 preferences,
+                config_loader,
                 input_func,
                 output_func,
             ),
@@ -399,28 +400,235 @@ def list_saved_plans_action(
 def list_recent_plans_action(
     service: PlanHistoryService,
     preferences: RecentPlanPreferences,
+    config_loader: Callable[[], Config],
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """List recently used plans after removing stale entries."""
+    """Show actionable recently used plans."""
+    while True:
+        try:
+            plans = service.list_plans()
+            recent_plans = preferences.list_existing_recent_plans(plans)
+        except (OSError, ValueError) as exc:
+            print_error(str(exc), output_func)
+            wait_for_enter(input_func)
+            return False
+        if not recent_plans:
+            output_func("")
+            print_warning("No recent plans found.", output_func)
+            wait_for_enter(input_func)
+            return False
+
+        options = [
+            MenuOption(
+                str(index),
+                f"{plan.id:<3} {plan.name}",
+                lambda plan=plan: open_recent_plan_action(
+                    service,
+                    preferences,
+                    config_loader,
+                    plan.id,
+                    input_func,
+                    output_func,
+                ),
+            )
+            for index, plan in enumerate(recent_plans, start=1)
+        ]
+        back_key = str(len(options) + 1)
+        options.append(MenuOption(back_key, "Back", lambda: True))
+        display_menu("Recent Plans", options, output_func)
+
+        option_map = {option.key: option for option in options}
+        choice = input_func("Choose an option: ").strip()
+        option = option_map.get(choice)
+        if option is None:
+            print_warning(f"Please choose one of: {', '.join(option_map)}.", output_func)
+            continue
+        if option.key == back_key:
+            return False
+        option.action()
+
+    return False
+
+
+def open_recent_plan_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    config_loader: Callable[[], Config],
+    plan_id: int,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Open the selected recent plan or remove it if stale."""
+    try:
+        plan = service.get_plan(plan_id)
+    except (FileNotFoundError, ValueError):
+        preferences.remove_recent(plan_id)
+        print_warning("That recent plan no longer exists and was removed.", output_func)
+        wait_for_enter(input_func)
+    else:
+        preferences.mark_recent(plan.id, plan.name)
+        run_selected_plan_menu(
+            service,
+            preferences,
+            config_loader,
+            plan,
+            input_func=input_func,
+            output_func=output_func,
+        )
+
+    return False
+
+
+def run_selected_plan_menu(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    config_loader: Callable[[], Config],
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> None:
+    """Open actions for one selected recent plan."""
+    options = [
+        MenuOption(
+            "1",
+            "View History",
+            lambda: view_selected_plan_history_action(
+                service,
+                preferences,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "2",
+            "Save New Version",
+            lambda: save_selected_plan_version_action(
+                service,
+                preferences,
+                config_loader,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "3",
+            "Restore Version",
+            lambda: restore_selected_plan_version_action(
+                service,
+                preferences,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("4", "Back", lambda: True),
+    ]
+
+    run_menu(
+        title=f"Plan: {plan.name}",
+        options=options,
+        input_func=input_func,
+        output_func=output_func,
+    )
+
+
+def view_selected_plan_history_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Display history for a selected plan without prompting for its ID."""
     output_func("")
     try:
-        plans = service.list_plans()
-        recent_plans = preferences.list_existing_recent_plans(plans)
-    except (OSError, ValueError) as exc:
+        display_plan_history(service, preferences, plan, output_func)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+    wait_for_enter(input_func)
+    return False
+
+
+def save_selected_plan_version_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    config_loader: Callable[[], Config],
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Save a new version for a selected recent plan after confirmation."""
+    output_func("")
+    note = input_func("Version note (optional): ").strip()
+    confirm = input_func(
+        f"Save a new version for '{plan.name}'? [y/N]: "
+    ).strip()
+    if confirm.casefold() not in {"y", "yes"}:
+        print_warning("Save cancelled.", output_func)
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        current_plan = service.get_plan(plan.id)
+        result = save_current_plan(
+            service,
+            config_loader(),
+            name=current_plan.name,
+            change_note=note or "Saved from recent plan menu",
+            source="interactive",
+            force=True,
+        )
+    except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
     else:
-        if not recent_plans:
-            print_warning("No recent plans found.", output_func)
-        else:
-            print_table(
-                ["ID", "Name"],
-                [[str(plan.id), plan.name] for plan in recent_plans],
-                output_func,
-            )
+        version = result[1]
+        preferences.mark_recent(current_plan.id, current_plan.name)
+        print_success(
+            f"Saved version {version.version_number} for {current_plan.name}",
+            output_func,
+        )
 
     wait_for_enter(input_func)
     return False
+
+
+def restore_selected_plan_version_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Restore a version that belongs to the selected plan."""
+    output_func("")
+    version_id = prompt_positive_int("Version ID: ", input_func, output_func)
+    if version_id is None:
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        source_version = service.get_plan_version(version_id)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    if source_version.plan_id != plan.id:
+        print_warning("That version does not belong to the selected plan.", output_func)
+        wait_for_enter(input_func)
+        return False
+
+    return restore_version_by_id_action(
+        service,
+        preferences,
+        version_id,
+        input_func,
+        output_func,
+        plan=plan,
+    )
 
 
 def save_current_plan_action(
@@ -550,13 +758,14 @@ def view_plan_history_action(
         return False
 
     try:
-        versions = service.list_plan_versions(plan_id)
         plan = service.get_plan(plan_id)
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
     else:
-        preferences.mark_recent(plan.id, plan.name)
-        print_plan_versions(versions, output_func)
+        try:
+            display_plan_history(service, preferences, plan, output_func)
+        except (FileNotFoundError, ValueError) as exc:
+            print_error(str(exc), output_func)
 
     wait_for_enter(input_func)
     return False
@@ -603,6 +812,37 @@ def restore_version_action(
         wait_for_enter(input_func)
         return False
 
+    return restore_version_by_id_action(
+        service,
+        preferences,
+        version_id,
+        input_func,
+        output_func,
+    )
+
+
+def display_plan_history(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    output_func: OutputFunc = print,
+) -> None:
+    """Display versions for an already-selected plan."""
+    versions = service.list_plan_versions(plan.id)
+    preferences.mark_recent(plan.id, plan.name)
+    print_plan_versions(versions, output_func)
+
+
+def restore_version_by_id_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    version_id: int,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+    *,
+    plan=None,
+) -> bool:
+    """Restore one version by ID after confirmation."""
     confirm = input_func(f"Restore version {version_id} as a new version? [y/N]: ")
     if confirm.strip().casefold() not in {"y", "yes"}:
         print_warning("Restore cancelled.", output_func)
@@ -611,11 +851,11 @@ def restore_version_action(
 
     try:
         version = service.restore_plan_version(version_id)
-        plan = service.get_plan(version.plan_id)
+        restored_plan = plan or service.get_plan(version.plan_id)
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
     else:
-        preferences.mark_recent(plan.id, plan.name)
+        preferences.mark_recent(restored_plan.id, restored_plan.name)
         print_success(
             f"Restored as version {version.version_number} "
             f"(version ID {version.id}).",
