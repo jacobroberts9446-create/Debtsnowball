@@ -20,6 +20,7 @@ from app.forecast_engine import ForecastEngine
 from app.history import PlanHistoryService
 from app.models import ActualEntryType
 from app.money import format_currency
+from app.preferences import RecentPlanPreferences
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
@@ -195,6 +196,7 @@ def main(argv: list[str] | None = None) -> None:
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
@@ -205,6 +207,7 @@ def run_main_menu(
     options = build_main_menu_options(
         generate_budget_plan_func,
         plan_history_service_factory=plan_history_service_factory,
+        preferences_factory=preferences_factory,
         config_loader=config_loader,
         input_func=input_func,
         output_func=output_func,
@@ -261,6 +264,7 @@ def display_menu(
 def build_main_menu_options(
     generate_budget_plan_func: Callable[[], None],
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
@@ -278,6 +282,7 @@ def build_main_menu_options(
             "Saved Plans",
             lambda: run_saved_plans_menu(
                 plan_history_service_factory=plan_history_service_factory,
+                preferences_factory=preferences_factory,
                 config_loader=config_loader,
                 input_func=input_func,
                 output_func=output_func,
@@ -288,6 +293,7 @@ def build_main_menu_options(
             "History",
             lambda: run_history_menu(
                 plan_history_service_factory=plan_history_service_factory,
+                preferences_factory=preferences_factory,
                 input_func=input_func,
                 output_func=output_func,
             ),
@@ -309,6 +315,7 @@ def run_generate_budget_plan_action(generate_budget_plan_func: Callable[[], None
 
 def run_saved_plans_menu(
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
@@ -317,6 +324,7 @@ def run_saved_plans_menu(
     config_loader = config_loader or load_current_config
     try:
         service = plan_history_service_factory()
+        preferences = preferences_factory()
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
         wait_for_enter(input_func)
@@ -324,20 +332,31 @@ def run_saved_plans_menu(
     options = [
         MenuOption(
             "1",
-            "List Saved Plans",
-            lambda: list_saved_plans_action(service, input_func, output_func),
+            "Recent Plans",
+            lambda: list_recent_plans_action(
+                service,
+                preferences,
+                input_func,
+                output_func,
+            ),
         ),
         MenuOption(
             "2",
+            "List All Saved Plans",
+            lambda: list_saved_plans_action(service, input_func, output_func),
+        ),
+        MenuOption(
+            "3",
             "Save Current Plan",
             lambda: save_current_plan_action(
                 service,
+                preferences,
                 config_loader,
                 input_func,
                 output_func,
             ),
         ),
-        MenuOption("3", "Back", lambda: True),
+        MenuOption("4", "Back", lambda: True),
     ]
 
     run_menu(
@@ -377,8 +396,36 @@ def list_saved_plans_action(
     return False
 
 
+def list_recent_plans_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """List recently used plans after removing stale entries."""
+    output_func("")
+    try:
+        plans = service.list_plans()
+        recent_plans = preferences.list_existing_recent_plans(plans)
+    except (OSError, ValueError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        if not recent_plans:
+            print_warning("No recent plans found.", output_func)
+        else:
+            print_table(
+                ["ID", "Name"],
+                [[str(plan.id), plan.name] for plan in recent_plans],
+                output_func,
+            )
+
+    wait_for_enter(input_func)
+    return False
+
+
 def save_current_plan_action(
     service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
     config_loader: Callable[[], Config],
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
@@ -423,8 +470,10 @@ def save_current_plan_action(
         print_error(str(exc), output_func)
     else:
         if result[0] == "created":
+            preferences.mark_recent(result[1].id, result[1].name)
             print_success(f"Created plan {result[1].id}: {result[1].name}", output_func)
         else:
+            preferences.mark_recent(existing[0].id, existing[0].name)
             print_success(
                 f"Saved version {result[1].version_number} for {name}",
                 output_func,
@@ -436,12 +485,14 @@ def save_current_plan_action(
 
 def run_history_menu(
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
+    preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
     """Open plan history tools and return to the main menu when finished."""
     try:
         service = plan_history_service_factory()
+        preferences = preferences_factory()
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
         wait_for_enter(input_func)
@@ -451,7 +502,12 @@ def run_history_menu(
         MenuOption(
             "1",
             "View Plan History",
-            lambda: view_plan_history_action(service, input_func, output_func),
+            lambda: view_plan_history_action(
+                service,
+                preferences,
+                input_func,
+                output_func,
+            ),
         ),
         MenuOption(
             "2",
@@ -461,7 +517,12 @@ def run_history_menu(
         MenuOption(
             "3",
             "Restore Version",
-            lambda: restore_version_action(service, input_func, output_func),
+            lambda: restore_version_action(
+                service,
+                preferences,
+                input_func,
+                output_func,
+            ),
         ),
         MenuOption("4", "Back", lambda: True),
     ]
@@ -477,6 +538,7 @@ def run_history_menu(
 
 def view_plan_history_action(
     service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
@@ -489,9 +551,11 @@ def view_plan_history_action(
 
     try:
         versions = service.list_plan_versions(plan_id)
+        plan = service.get_plan(plan_id)
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
     else:
+        preferences.mark_recent(plan.id, plan.name)
         print_plan_versions(versions, output_func)
 
     wait_for_enter(input_func)
@@ -528,6 +592,7 @@ def compare_versions_action(
 
 def restore_version_action(
     service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
@@ -546,9 +611,11 @@ def restore_version_action(
 
     try:
         version = service.restore_plan_version(version_id)
+        plan = service.get_plan(version.plan_id)
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
     else:
+        preferences.mark_recent(plan.id, plan.name)
         print_success(
             f"Restored as version {version.version_number} "
             f"(version ID {version.id}).",

@@ -38,12 +38,18 @@ class FakePlanHistoryService:
         self.saved_versions = []
         self.versions_by_plan = {}
         self.comparison = SimpleNamespace(explanation="Comparison explanation")
-        self.restored_version = SimpleNamespace(id=12, version_number=3)
+        self.restored_version = SimpleNamespace(id=12, plan_id=4, version_number=3)
         self.compare_error = None
         self.restore_error = None
 
     def list_plans(self):
         return self.plans
+
+    def get_plan(self, plan_id):
+        for plan in self.plans:
+            if plan.id == plan_id:
+                return plan
+        raise ValueError(f"plan {plan_id} was not found.")
 
     def create_plan(
         self,
@@ -77,6 +83,7 @@ class FakePlanHistoryService:
     ):
         version = SimpleNamespace(
             version_number=len(self.saved_versions) + 2,
+            id=len(self.saved_versions) + 20,
             plan_id=plan_id,
             config=config,
             change_note=change_note,
@@ -104,6 +111,30 @@ class FakePlanHistoryService:
             raise self.restore_error
         self.restored_version.source_version_id = version_id
         return self.restored_version
+
+
+class FakePreferences:
+    """In-memory recent-plan preferences for menu tests."""
+
+    def __init__(self, recent_plans=None) -> None:
+        self.recent_plans = recent_plans or []
+        self.marked = []
+
+    def list_existing_recent_plans(self, existing_plans):
+        existing_by_id = {plan.id: plan.name for plan in existing_plans}
+        self.recent_plans = [
+            SimpleNamespace(id=plan.id, name=existing_by_id[plan.id])
+            for plan in self.recent_plans
+            if plan.id in existing_by_id
+        ]
+        return self.recent_plans
+
+    def mark_recent(self, plan_id, plan_name):
+        self.marked.append((plan_id, plan_name))
+        self.recent_plans = [
+            SimpleNamespace(id=plan_id, name=plan_name),
+            *[plan for plan in self.recent_plans if plan.id != plan_id],
+        ][:5]
 
 
 def test_style_text_adds_ansi_and_reset_when_color_enabled() -> None:
@@ -250,35 +281,123 @@ def test_menu_help_explains_options_and_returns_to_menu() -> None:
 
 def test_menu_saved_plans_submenu_back_returns_to_main_menu() -> None:
     """The saved-plans submenu can return to the main menu."""
-    choices = iter(["2", "3", "5"])
+    choices = iter(["2", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
 
     assert output.count("DebtSnowball v1.1.0") == 2
     assert "Saved Plans" in output
-    assert "1. List Saved Plans" in output
-    assert "2. Save Current Plan" in output
-    assert "3. Back" in output
+    assert "1. Recent Plans" in output
+    assert "2. List All Saved Plans" in output
+    assert "3. Save Current Plan" in output
+    assert "4. Back" in output
     assert "Success: Goodbye." in output
+
+
+def test_saved_plans_recent_empty_waits_and_returns_to_submenu() -> None:
+    """Recent Plans shows a friendly warning when no recents exist."""
+    prompts = []
+    choices = iter(["2", "1", "", "4", "5"])
+    output = []
+    service = FakePlanHistoryService()
+    preferences = FakePreferences()
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
+        input_func=lambda prompt: prompts.append(prompt) or next(choices),
+        output_func=output.append,
+    )
+
+    assert "Warning: No recent plans found." in output
+    assert output.count("Saved Plans") == 2
+    assert "Press Enter to return to the main menu..." in prompts
+
+
+def test_saved_plans_recent_populated_uses_table() -> None:
+    """Recent Plans displays most-recent-first plan IDs and names."""
+    choices = iter(["2", "1", "", "4", "5"])
+    output = []
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(id=1, name="Older Plan", description=""),
+            SimpleNamespace(id=2, name="Current Plan", description=""),
+        ]
+    )
+    preferences = FakePreferences(
+        [
+            SimpleNamespace(id=2, name="Current Plan"),
+            SimpleNamespace(id=1, name="Older Plan"),
+        ]
+    )
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "ID | Name" in text
+    assert "2  | Current Plan" in text
+    assert "1  | Older Plan" in text
+
+
+def test_saved_plans_recent_removes_stale_plans() -> None:
+    """Stale recent plans are removed and not displayed."""
+    choices = iter(["2", "1", "", "4", "5"])
+    output = []
+    service = FakePlanHistoryService(
+        [SimpleNamespace(id=2, name="Current Plan", description="")]
+    )
+    preferences = FakePreferences(
+        [
+            SimpleNamespace(id=99, name="Gone"),
+            SimpleNamespace(id=2, name="Old Name"),
+        ]
+    )
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "99" not in text
+    assert "Gone" not in text
+    assert "2  | Current Plan" in text
+    assert [(plan.id, plan.name) for plan in preferences.recent_plans] == [
+        (2, "Current Plan")
+    ]
 
 
 def test_saved_plans_list_empty_waits_and_returns_to_submenu() -> None:
     """Listing with no saved plans shows a friendly empty state."""
     prompts = []
-    choices = iter(["2", "1", "", "3", "5"])
+    choices = iter(["2", "2", "", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda prompt: prompts.append(prompt) or next(choices),
         output_func=output.append,
     )
@@ -291,7 +410,7 @@ def test_saved_plans_list_empty_waits_and_returns_to_submenu() -> None:
 def test_saved_plans_list_populated_waits_and_returns_to_submenu() -> None:
     """Listing saved plans displays ID, name, and optional description."""
     prompts = []
-    choices = iter(["2", "1", "", "3", "5"])
+    choices = iter(["2", "2", "", "4", "5"])
     output = []
     service = FakePlanHistoryService(
         [
@@ -299,10 +418,12 @@ def test_saved_plans_list_populated_waits_and_returns_to_submenu() -> None:
             SimpleNamespace(id=8, name="No Description", description=""),
         ]
     )
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda prompt: prompts.append(prompt) or next(choices),
         output_func=output.append,
     )
@@ -317,14 +438,16 @@ def test_saved_plans_list_populated_waits_and_returns_to_submenu() -> None:
 def test_saved_plans_save_new_plan() -> None:
     """Saving a new plan prompts for details and creates it through the service."""
     prompts = []
-    choices = iter(["2", "2", "New Plan", "A useful plan", "", "3", "5"])
+    choices = iter(["2", "3", "New Plan", "A useful plan", "", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
     config = SimpleNamespace(name="config")
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         config_loader=lambda: config,
         input_func=lambda prompt: prompts.append(prompt) or next(choices),
         output_func=output.append,
@@ -333,6 +456,7 @@ def test_saved_plans_save_new_plan() -> None:
     assert service.created[0].name == "New Plan"
     assert service.created[0].description == "A useful plan"
     assert service.created[0].config is config
+    assert preferences.marked == [(1, "New Plan")]
     assert "Success: Created plan 1: New Plan" in output
     assert "Plan name: " in prompts
     assert "Description (optional): " in prompts
@@ -340,13 +464,15 @@ def test_saved_plans_save_new_plan() -> None:
 
 def test_saved_plans_save_rejects_blank_name() -> None:
     """A blank plan name does not call the service save methods."""
-    choices = iter(["2", "2", "   ", "", "3", "5"])
+    choices = iter(["2", "3", "   ", "", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         config_loader=lambda: SimpleNamespace(name="config"),
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
@@ -354,21 +480,24 @@ def test_saved_plans_save_rejects_blank_name() -> None:
 
     assert service.created == []
     assert service.saved_versions == []
+    assert preferences.marked == []
     assert "Warning: Plan name cannot be blank." in output
 
 
 def test_saved_plans_save_existing_plan_when_confirmed() -> None:
     """An existing plan saves a new version only when confirmed."""
-    choices = iter(["2", "2", "Current Plan", "", "yes", "", "3", "5"])
+    choices = iter(["2", "3", "Current Plan", "", "yes", "", "4", "5"])
     output = []
     service = FakePlanHistoryService(
         [SimpleNamespace(id=4, name="Current Plan", description="Live")]
     )
+    preferences = FakePreferences()
     config = SimpleNamespace(name="config")
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         config_loader=lambda: config,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
@@ -378,20 +507,23 @@ def test_saved_plans_save_existing_plan_when_confirmed() -> None:
     assert service.saved_versions[0].plan_id == 4
     assert service.saved_versions[0].force is True
     assert service.saved_versions[0].config is config
+    assert preferences.marked == [(4, "Current Plan")]
     assert "Success: Saved version 2 for Current Plan" in output
 
 
 def test_saved_plans_save_existing_plan_when_declined() -> None:
     """Declining the existing-plan prompt cancels without saving."""
-    choices = iter(["2", "2", "Current Plan", "", "n", "", "3", "5"])
+    choices = iter(["2", "3", "Current Plan", "", "n", "", "4", "5"])
     output = []
     service = FakePlanHistoryService(
         [SimpleNamespace(id=4, name="Current Plan", description="Live")]
     )
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         config_loader=lambda: SimpleNamespace(name="config"),
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
@@ -399,6 +531,7 @@ def test_saved_plans_save_existing_plan_when_declined() -> None:
 
     assert service.created == []
     assert service.saved_versions == []
+    assert preferences.marked == []
     assert "Warning: Save cancelled." in output
 
 
@@ -407,10 +540,12 @@ def test_menu_history_submenu_back_returns_to_main_menu() -> None:
     choices = iter(["3", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
@@ -429,10 +564,12 @@ def test_history_view_rejects_invalid_plan_id() -> None:
     choices = iter(["3", "1", "abc", "", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
@@ -445,7 +582,8 @@ def test_history_view_populated_versions() -> None:
     prompts = []
     choices = iter(["3", "1", "7", "", "4", "5"])
     output = []
-    service = FakePlanHistoryService()
+    service = FakePlanHistoryService([SimpleNamespace(id=7, name="Plan 7", description="")])
+    preferences = FakePreferences()
     service.versions_by_plan[7] = [
         SimpleNamespace(
             id=21,
@@ -466,6 +604,7 @@ def test_history_view_populated_versions() -> None:
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda prompt: prompts.append(prompt) or next(choices),
         output_func=output.append,
     )
@@ -474,6 +613,7 @@ def test_history_view_populated_versions() -> None:
     assert "ID | Version | Created                   | Status | Note" in text
     assert "21 | v1      | 2026-07-22T01:00:00+00:00 |        | Initial" in text
     assert "22 | v2      | 2026-07-22T02:00:00+00:00 | active | Updated" in text
+    assert preferences.marked == [(7, "Plan 7")]
     assert "Press Enter to return to the main menu..." in prompts
 
 
@@ -481,12 +621,14 @@ def test_history_view_empty_and_missing_history() -> None:
     """View history handles empty version lists and missing plans gracefully."""
     choices = iter(["3", "1", "7", "", "1", "8", "", "4", "5"])
     output = []
-    service = FakePlanHistoryService()
+    service = FakePlanHistoryService([SimpleNamespace(id=7, name="Plan 7", description="")])
     service.versions_by_plan[7] = []
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
@@ -500,10 +642,12 @@ def test_history_compare_versions() -> None:
     choices = iter(["3", "2", "10", "11", "", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
@@ -519,10 +663,12 @@ def test_history_compare_invalid_input_and_errors() -> None:
     output = []
     service = FakePlanHistoryService()
     service.compare_error = ValueError("version was not found.")
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
@@ -535,16 +681,19 @@ def test_history_restore_confirmed() -> None:
     """Restore Version asks for confirmation and displays the new version."""
     choices = iter(["3", "3", "8", "y", "", "4", "5"])
     output = []
-    service = FakePlanHistoryService()
+    service = FakePlanHistoryService([SimpleNamespace(id=4, name="Current Plan", description="")])
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
 
     assert service.restored_version.source_version_id == 8
+    assert preferences.marked == [(4, "Current Plan")]
     assert "Success: Restored as version 3 (version ID 12)." in output
 
 
@@ -553,15 +702,18 @@ def test_history_restore_declined() -> None:
     choices = iter(["3", "3", "8", "no", "", "4", "5"])
     output = []
     service = FakePlanHistoryService()
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
 
     assert not hasattr(service.restored_version, "source_version_id")
+    assert preferences.marked == []
     assert "Warning: Restore cancelled." in output
 
 
@@ -571,10 +723,12 @@ def test_history_restore_invalid_input_and_errors() -> None:
     output = []
     service = FakePlanHistoryService()
     service.restore_error = ValueError("version 8 was not found.")
+    preferences = FakePreferences()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
         plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
