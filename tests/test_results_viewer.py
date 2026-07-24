@@ -5,6 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from app.models import Debt, DebtPayoffForecast
+from app.plan_save import PlanSaveState
 from app.plan_setup import PayFrequency
 from app.savings_setup import default_savings_strategy
 from app import results_viewer
@@ -88,7 +89,7 @@ def run_viewer(choices: list[str], generated=None):
 
 def test_results_summary_displays_available_engine_values() -> None:
     """The summary screen prints available generated values."""
-    output = run_viewer(["4"])
+    output = run_viewer(["5"])
     text = output_text(output)
 
     assert "Results Summary" in text
@@ -109,14 +110,14 @@ def test_results_summary_displays_available_engine_values() -> None:
 def test_results_summary_handles_missing_optional_values() -> None:
     """Missing optional generated values render as Not available."""
     generated = SimpleNamespace(forecast=SimpleNamespace(periods=[], debt_payoffs=[]))
-    output = run_viewer(["4"], generated)
+    output = run_viewer(["5"], generated)
 
     assert "Not available." in output_text(output)
 
 
 def test_debt_summary_table_formatting() -> None:
     """Debt summary displays debt details and payoff dates."""
-    output = run_viewer(["1", "1", "4"])
+    output = run_viewer(["1", "1", "5"])
     text = output_text(output)
 
     assert "Debt Summary" in text
@@ -152,7 +153,7 @@ def test_budget_summary_displays_configuration_values() -> None:
 
 def test_timeline_one_page() -> None:
     """A short timeline renders one page and can return to summary."""
-    output = run_viewer(["3", "1", "4"])
+    output = run_viewer(["3", "1", "5"])
     text = output_text(output)
 
     assert "Payoff Timeline Page 1 of 1" in text
@@ -163,7 +164,7 @@ def test_timeline_one_page() -> None:
 def test_timeline_multiple_pages_next_previous_and_return() -> None:
     """A long timeline can navigate forward, back, and return."""
     periods = [period(index) for index in range(25)]
-    output = run_viewer(["3", "1", "2", "3", "4"], generated_stub(periods=periods))
+    output = run_viewer(["3", "1", "2", "3", "5"], generated_stub(periods=periods))
     text = output_text(output)
 
     assert "Payoff Timeline Page 1 of 2" in text
@@ -181,16 +182,39 @@ def test_timeline_empty_forecast() -> None:
 
 def test_return_to_main_menu_from_summary() -> None:
     """Return to main menu exits the viewer cleanly."""
-    output = run_viewer(["4"])
+    output = run_viewer(["5"])
 
     assert output.count("Results Summary") == 1
 
 
 def test_invalid_navigation_returns_to_viewer_menu() -> None:
     """Invalid result menu choices display a friendly warning."""
-    output = run_viewer(["bad", "4"])
+    output = run_viewer(["bad", "5"])
 
-    assert "Warning: Please choose one of: 1, 2, 3, 4." in output
+    assert "Warning: Please choose one of: 1, 2, 3, 4, 5." in output
+    assert output.count("Results Summary") == 2
+
+
+def test_save_plan_option_invokes_save_workflow() -> None:
+    """The Save Plan result action delegates to the save workflow."""
+    generated = generated_stub()
+    save_state = PlanSaveState()
+    calls = []
+    output = []
+    inputs = iter(["4", "5"])
+
+    def save_workflow(plan, state, **_kwargs) -> None:
+        calls.append((plan, state))
+
+    results_viewer.view_results(
+        generated,
+        input_func=lambda _prompt: next(inputs),
+        output_func=output.append,
+        save_workflow=save_workflow,
+        save_state=save_state,
+    )
+
+    assert calls == [(generated, save_state)]
     assert output.count("Results Summary") == 2
 
 
@@ -206,7 +230,7 @@ def test_viewer_does_not_rerun_engine_or_touch_persistence(monkeypatch) -> None:
     monkeypatch.setattr("app.database.Database", forbidden)
     monkeypatch.setattr("app.excel_writer.ExcelWriter", forbidden)
 
-    output = run_viewer(["4"])
+    output = run_viewer(["5"])
 
     assert calls == []
     assert "Results Summary" in output

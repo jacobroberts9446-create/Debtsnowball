@@ -7,6 +7,7 @@ from app.console import OutputFunc, print_section_header, print_table, print_war
 from app.debt_input import total_debt_balance
 from app.menu import InputFunc, MenuOption, display_menu
 from app.money import format_currency
+from app.plan_save import PlanSaveState, run_save_plan_workflow
 from app.plan_setup import pay_frequency_label
 from app.savings_setup import strategy_label
 
@@ -17,8 +18,11 @@ def view_results(
     generated_plan,
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
+    save_workflow=run_save_plan_workflow,
+    save_state: PlanSaveState | None = None,
 ) -> None:
     """Display generated results until the user returns to the main menu."""
+    save_state = save_state or PlanSaveState()
     while True:
         print_results_summary(generated_plan, output_func)
         display_menu(
@@ -27,7 +31,8 @@ def view_results(
                 MenuOption("1", "View Debt Summary", lambda: True),
                 MenuOption("2", "View Budget Summary", lambda: True),
                 MenuOption("3", "View Payoff Timeline", lambda: True),
-                MenuOption("4", "Return to Main Menu", lambda: True),
+                MenuOption("4", "Save Plan", lambda: True),
+                MenuOption("5", "Return to Main Menu", lambda: True),
             ],
             output_func,
         )
@@ -52,9 +57,16 @@ def view_results(
             if view_payoff_timeline(generated_plan, input_func, output_func):
                 return
         elif choice == "4":
+            save_workflow(
+                generated_plan,
+                save_state,
+                input_func=input_func,
+                output_func=output_func,
+            )
+        elif choice == "5":
             return
         else:
-            print_warning("Please choose one of: 1, 2, 3, 4.", output_func)
+            print_warning("Please choose one of: 1, 2, 3, 4, 5.", output_func)
 
 
 def screen_navigation(
