@@ -7,6 +7,11 @@ from types import SimpleNamespace
 from app import budget_setup
 from app.models import Bill, Debt
 from app.plan_setup import PayFrequency
+from app.savings_setup import (
+    SavingsStrategy,
+    SavingsStrategySelection,
+    default_savings_strategy,
+)
 
 
 def sample_debt(name: str = "Visa", balance: str = "100.00") -> Debt:
@@ -29,6 +34,7 @@ def summary_stub(setup=None):
         monthly_personal_spending=getattr(setup, "monthly_personal_spending", None),
         current_savings=getattr(setup, "current_savings", None),
         emergency_fund_target=getattr(setup, "emergency_fund_target", None),
+        savings_strategy=getattr(setup, "savings_strategy", default_savings_strategy()),
         debt_count=1,
         total_starting_debt=Decimal("100.00"),
         projected_debt_free_date=date(2026, 8, 14),
@@ -42,7 +48,14 @@ def summary_stub(setup=None):
     )
 
 
-def run_budget_setup(choices: list[str], *, debts=None, bills=None, generator=None):
+def run_budget_setup(
+    choices: list[str],
+    *,
+    debts=None,
+    bills=None,
+    generator=None,
+    savings_strategy=None,
+):
     """Run full setup with canned inputs and fake collectors."""
     output = []
     prompts = []
@@ -68,6 +81,9 @@ def run_budget_setup(choices: list[str], *, debts=None, bills=None, generator=No
         output_func=output.append,
         debt_collector=debt_collector,
         bill_collector=bill_collector,
+        savings_strategy_collector=lambda **_kwargs: (
+            savings_strategy or default_savings_strategy()
+        ),
         generator=fake_generator,
     )
     return result, prompts, output, calls
@@ -87,6 +103,7 @@ def test_valid_full_setup_generates_in_memory_summary() -> None:
     assert result.monthly_personal_spending == Decimal("300.00")
     assert result.current_savings == Decimal("500.00")
     assert result.emergency_fund_target == Decimal("400.00")
+    assert result.savings_strategy == default_savings_strategy()
     assert calls["generated"] == [result.setup]
     assert "Full Plan Review" in output
 
@@ -172,6 +189,7 @@ def test_debt_entry_back_navigation_restarts_setup_fields() -> None:
         output_func=output.append,
         debt_collector=debt_collector,
         bill_collector=lambda **_kwargs: [sample_bill()],
+        savings_strategy_collector=lambda **_kwargs: default_savings_strategy(),
         generator=summary_stub,
     )
 
@@ -217,6 +235,7 @@ def test_bill_entry_back_navigation_restarts_setup_fields() -> None:
         output_func=output.append,
         debt_collector=lambda *_args, **_kwargs: [sample_debt()],
         bill_collector=bill_collector,
+        savings_strategy_collector=lambda **_kwargs: default_savings_strategy(),
         generator=summary_stub,
     )
 
@@ -288,6 +307,7 @@ def test_editing_each_review_section() -> None:
         output_func=output.append,
         debt_collector=debt_collector,
         bill_collector=bill_collector,
+        savings_strategy_collector=lambda **_kwargs: default_savings_strategy(),
         generator=summary_stub,
     )
 
@@ -318,6 +338,27 @@ def test_final_review_totals() -> None:
     assert "Total Monthly Bills" in text
     assert "$1,250.00" in text
     assert "Total Minimum Payments" in text
+
+
+def test_final_review_displays_custom_savings_strategy() -> None:
+    """The full review shows selected custom savings percentages."""
+    result, _prompts, output, _calls = run_budget_setup(
+        ["Plan", "1", "07/17/2026", "2000", "1", "1", "1", "0", "1", "0", "0", "1"],
+        savings_strategy=SavingsStrategySelection(
+            SavingsStrategy.CUSTOM,
+            Decimal("25"),
+            Decimal("75"),
+        ),
+    )
+
+    assert result is not None
+    text = "\n".join(output)
+    assert "Savings Strategy" in text
+    assert "Custom" in text
+    assert "Savings %" in text
+    assert "25%" in text
+    assert "Snowball %" in text
+    assert "75%" in text
 
 
 def test_generation_validation_failure_returns_to_review_and_can_retry() -> None:

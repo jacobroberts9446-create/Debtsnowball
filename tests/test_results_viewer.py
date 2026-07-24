@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from app.models import Debt, DebtPayoffForecast
 from app.plan_setup import PayFrequency
+from app.savings_setup import default_savings_strategy
 from app import results_viewer
 
 
@@ -28,6 +29,7 @@ def setup_stub(debts=None):
         monthly_personal_spending=Decimal("300.00"),
         current_savings=Decimal("500.00"),
         emergency_fund_target=Decimal("1000.00"),
+        savings_strategy=default_savings_strategy(),
     )
 
 
@@ -100,6 +102,8 @@ def test_results_summary_displays_available_engine_values() -> None:
     assert "$105.00" in text
     assert "Emergency-Fund Status" in text
     assert "Met" in text
+    assert "Savings Strategy" in text
+    assert "Split Between Savings and Snowball" in text
 
 
 def test_results_summary_handles_missing_optional_values() -> None:
@@ -141,6 +145,8 @@ def test_budget_summary_displays_configuration_values() -> None:
     assert "Biweekly" in text
     assert "Monthly Bills" in text
     assert "$1,200.00" in text
+    assert "Savings Strategy" in text
+    assert "Split Between Savings and Snowball" in text
     assert "Ending Savings" in text
 
 

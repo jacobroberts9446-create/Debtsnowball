@@ -14,6 +14,7 @@ from app.plan_generation import (
     setup_to_engine_config,
 )
 from app.plan_setup import PayFrequency
+from app.savings_setup import SavingsStrategy, SavingsStrategySelection
 
 
 def setup_result() -> BudgetSetupResult:
@@ -71,8 +72,9 @@ def test_valid_setup_generates_plan_in_memory(monkeypatch) -> None:
     writes = []
 
     class FakeForecastEngine:
-        def __init__(self, config) -> None:
+        def __init__(self, config, savings_percentage_override=None) -> None:
             self.config = config
+            self.savings_percentage_override = savings_percentage_override
 
         def forecast(self):
             writes.append("forecasted")
@@ -101,6 +103,49 @@ def test_valid_setup_generates_plan_in_memory(monkeypatch) -> None:
     assert summary.total_projected_payments == Decimal("60.00")
     assert summary.savings_goal_met is True
     assert summary.setup is setup
+
+
+def test_savings_strategy_maps_to_forecast_engine_override(monkeypatch) -> None:
+    """Selected strategy is passed through the existing forecast override seam."""
+    overrides = []
+
+    class FakeForecastEngine:
+        def __init__(self, _config, savings_percentage_override=None) -> None:
+            overrides.append(savings_percentage_override)
+
+        def forecast(self):
+            return SimpleNamespace(
+                starting_debt=Decimal("100.00"),
+                debt_free_date=date(2026, 7, 31),
+                total_interest_paid=Decimal("0.00"),
+                total_minimum_payments=Decimal("10.00"),
+                total_snowball_payments=Decimal("50.00"),
+                ending_savings=Decimal("1200.00"),
+                periods=[SimpleNamespace(snowball_paid=Decimal("50.00"))],
+            )
+
+    monkeypatch.setattr("app.plan_generation.ForecastEngine", FakeForecastEngine)
+    base_setup = setup_result()
+    setup = BudgetSetupResult(
+        plan_name=base_setup.plan_name,
+        pay_frequency=base_setup.pay_frequency,
+        first_paycheck_date=base_setup.first_paycheck_date,
+        net_paycheck_amount=base_setup.net_paycheck_amount,
+        debts=base_setup.debts,
+        bills=base_setup.bills,
+        monthly_personal_spending=base_setup.monthly_personal_spending,
+        current_savings=base_setup.current_savings,
+        emergency_fund_target=base_setup.emergency_fund_target,
+        savings_strategy=SavingsStrategySelection(
+            SavingsStrategy.CUSTOM,
+            Decimal("25"),
+            Decimal("75"),
+        ),
+    )
+
+    generate_plan_from_setup(setup)
+
+    assert overrides == [Decimal("0.25")]
 
 
 def test_no_database_or_workbook_generation_is_invoked(monkeypatch) -> None:

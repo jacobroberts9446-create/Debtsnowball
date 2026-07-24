@@ -8,6 +8,7 @@ from app.debt_input import total_debt_balance
 from app.menu import InputFunc, MenuOption, display_menu
 from app.money import format_currency
 from app.plan_setup import pay_frequency_label
+from app.savings_setup import strategy_label
 
 TIMELINE_PAGE_SIZE = 20
 
@@ -145,6 +146,11 @@ def print_results_summary(generated_plan, output_func: OutputFunc = print) -> No
             ],
             [
                 "BUDGET",
+                "Savings Strategy",
+                strategy_value(setup),
+            ],
+            [
+                "BUDGET",
                 "Emergency-Fund Status",
                 status_value(getattr(generated_plan, "savings_goal_met", None)),
             ],
@@ -208,6 +214,11 @@ def print_budget_summary(generated_plan, output_func: OutputFunc = print) -> Non
                 "Budget",
                 "Emergency-Fund Target",
                 setup_money(setup, "emergency_fund_target"),
+            ],
+            [
+                "Budget",
+                "Savings Strategy",
+                strategy_value(setup),
             ],
             [
                 "Forecast",
@@ -397,6 +408,11 @@ def setup_frequency(setup) -> str:
     if pay_frequency is None:
         return "Not available."
     return pay_frequency_label(pay_frequency)
+
+
+def strategy_value(setup) -> str:
+    """Return setup savings strategy or Not available."""
+    return strategy_label(getattr(setup, "savings_strategy", None))
 
 
 def sum_bill_amounts(setup) -> Decimal | None:

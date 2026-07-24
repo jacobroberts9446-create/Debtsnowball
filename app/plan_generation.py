@@ -9,6 +9,7 @@ from app.forecast_engine import ForecastEngine
 from app.models import BudgetSettings, ForecastSummary
 from app.money import ZERO_MONEY, money
 from app.plan_setup import PayFrequency
+from app.savings_setup import savings_percentage_for_engine
 
 
 PAYCHECKS_PER_MONTH = {
@@ -40,7 +41,12 @@ class GeneratedPlanSummary:
 def generate_plan_from_setup(setup) -> GeneratedPlanSummary:
     """Generate an in-memory payoff plan from collected setup inputs."""
     config = setup_to_engine_config(setup)
-    forecast = ForecastEngine(config).forecast()
+    forecast = ForecastEngine(
+        config,
+        savings_percentage_override=savings_percentage_for_engine(
+            setup.savings_strategy,
+        ),
+    ).forecast()
     first_period_snowball = (
         money(forecast.periods[0].snowball_paid) if forecast.periods else ZERO_MONEY
     )

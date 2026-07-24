@@ -1,6 +1,6 @@
 """Interactive full budget setup and in-memory generation workflow."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
@@ -27,6 +27,12 @@ from app.plan_setup import (
     parse_net_paycheck_amount,
     raise_if_cancelled,
 )
+from app.savings_setup import (
+    SavingsStrategySelection,
+    default_savings_strategy,
+    prompt_savings_strategy,
+    strategy_label,
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,9 @@ class BudgetSetupResult:
     monthly_personal_spending: Decimal
     current_savings: Decimal
     emergency_fund_target: Decimal
+    savings_strategy: SavingsStrategySelection = field(
+        default_factory=default_savings_strategy,
+    )
 
 
 def collect_budget_setup(
@@ -49,6 +58,7 @@ def collect_budget_setup(
     output_func: OutputFunc = print,
     debt_collector=collect_setup_debts,
     bill_collector=collect_bills,
+    savings_strategy_collector=prompt_savings_strategy,
     generator=generate_plan_from_setup,
 ):
     """Collect full setup, review it, and generate an in-memory plan."""
@@ -64,6 +74,7 @@ def collect_budget_setup(
                 output_func,
                 debt_collector,
                 bill_collector,
+                savings_strategy_collector,
                 generator,
             )
         if debts is None:
@@ -77,6 +88,7 @@ def collect_budget_setup(
                 output_func,
                 debt_collector,
                 bill_collector,
+                savings_strategy_collector,
                 generator,
             )
 
@@ -87,6 +99,7 @@ def collect_budget_setup(
                 output_func,
                 debt_collector,
                 bill_collector,
+                savings_strategy_collector,
                 generator,
             )
         if bills is None:
@@ -100,6 +113,7 @@ def collect_budget_setup(
                 output_func,
                 debt_collector,
                 bill_collector,
+                savings_strategy_collector,
                 generator,
             )
 
@@ -113,10 +127,15 @@ def collect_budget_setup(
                 output_func,
                 debt_collector,
                 bill_collector,
+                savings_strategy_collector,
                 generator,
             )
 
         current_savings, emergency_target = prompt_savings(input_func, output_func)
+        savings_strategy = savings_strategy_collector(
+            input_func=input_func,
+            output_func=output_func,
+        )
         setup = BudgetSetupResult(
             plan_name=basics.plan_name,
             pay_frequency=basics.pay_frequency,
@@ -127,6 +146,7 @@ def collect_budget_setup(
             monthly_personal_spending=personal,
             current_savings=current_savings,
             emergency_fund_target=emergency_target,
+            savings_strategy=savings_strategy,
         )
         return review_budget_setup(
             setup,
@@ -134,6 +154,7 @@ def collect_budget_setup(
             output_func,
             debt_collector,
             bill_collector,
+            savings_strategy_collector,
             generator,
         )
     except PlanSetupCancelled:
@@ -147,6 +168,7 @@ def review_budget_setup(
     output_func: OutputFunc,
     debt_collector,
     bill_collector,
+    savings_strategy_collector,
     generator,
 ):
     """Review full setup and generate when confirmed."""
@@ -215,10 +237,15 @@ def review_budget_setup(
                 )
             elif choice == "6":
                 current_savings, emergency_target = prompt_savings(input_func, output_func)
+                savings_strategy = savings_strategy_collector(
+                    input_func=input_func,
+                    output_func=output_func,
+                )
                 current = replace_budget_setup(
                     current,
                     current_savings=current_savings,
                     emergency_fund_target=emergency_target,
+                    savings_strategy=savings_strategy,
                 )
             elif choice == "7":
                 print_warning("Plan setup cancelled.", output_func)
@@ -434,6 +461,17 @@ def print_full_review(setup: BudgetSetupResult, output_func: OutputFunc = print)
             ],
             ["BUDGET", "Current Savings", format_currency(setup.current_savings)],
             ["BUDGET", "Emergency-Fund Target", format_currency(setup.emergency_fund_target)],
+            ["BUDGET", "Savings Strategy", strategy_label(setup.savings_strategy)],
+            [
+                "BUDGET",
+                "Savings %",
+                percent_value(setup.savings_strategy.savings_percent),
+            ],
+            [
+                "BUDGET",
+                "Snowball %",
+                percent_value(setup.savings_strategy.snowball_percent),
+            ],
         ],
         output_func,
     )
@@ -479,6 +517,15 @@ def replace_budget_setup(setup: BudgetSetupResult, **changes) -> BudgetSetupResu
         "monthly_personal_spending": setup.monthly_personal_spending,
         "current_savings": setup.current_savings,
         "emergency_fund_target": setup.emergency_fund_target,
+        "savings_strategy": setup.savings_strategy,
     }
     values.update(changes)
     return BudgetSetupResult(**values)
+
+
+def percent_value(value: Decimal | None) -> str:
+    """Return a display percentage or Not available."""
+    if value is None:
+        return "Not available."
+    text = f"{value:f}".rstrip("0").rstrip(".")
+    return f"{text}%"
