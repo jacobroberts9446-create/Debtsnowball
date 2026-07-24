@@ -499,6 +499,17 @@ class PlanHistoryService:
         """Soft-delete a plan from normal listings."""
         self.repository.archive_plan(plan_id, utc_timestamp())
 
+    def rename_plan(self, plan_id: int, name: str) -> Plan:
+        """Rename a saved plan without changing its immutable versions."""
+        new_name = name.strip()
+        if not new_name:
+            raise ValueError("plan name cannot be blank.")
+        current = self.get_plan(plan_id)
+        if current.name != new_name and self.repository.plan_name_exists(new_name):
+            raise ValueError("a nonarchived plan with this name already exists.")
+        self.repository.rename_plan(plan_id, new_name, utc_timestamp())
+        return self.get_plan(plan_id)
+
     def restore_plan_version(self, version_id: int, *, change_note: str = "Restored") -> PlanVersion:
         """Restore an older version by creating a new immutable version."""
         version = self.get_plan_version(version_id)

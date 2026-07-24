@@ -6,10 +6,14 @@ DebtSnowball
 
 from copy import deepcopy
 from datetime import date, datetime
+from decimal import Decimal
+import json
+from pathlib import Path
 from typing import Callable
 
+from app.bill_input import collect_bills
 from app.budget_engine import BudgetEngine
-from app.budget_setup import collect_budget_setup
+from app.budget_setup import BudgetSetupResult, collect_budget_setup, review_budget_setup
 from app.calendar_engine import CalendarEngine
 from app.cli import CliDependencies, main as cli_main
 from app.config import Config
@@ -34,8 +38,16 @@ from app.menu import (
 )
 from app.money import format_currency
 from app.preferences import RecentPlanPreferences
+from app.plan_generation import PAYCHECKS_PER_MONTH, generate_plan_from_setup
+from app.plan_setup import PayFrequency, collect_setup_debts
 from app.results_viewer import view_results
 from app.scenario_engine import ScenarioEngine
+from app.savings_setup import (
+    SavingsStrategy,
+    SavingsStrategySelection,
+    default_savings_strategy,
+    prompt_savings_strategy,
+)
 from app.target_calculator import DebtFreeTargetCalculator
 from app.version import APP_VERSION
 
@@ -380,10 +392,41 @@ def run_selected_plan_menu(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> None:
-    """Open actions for one selected recent plan."""
+    """Open details and implemented actions for one selected plan."""
     options = [
         MenuOption(
             "1",
+            "View Latest Plan Summary",
+            lambda: view_latest_plan_summary_action(
+                service,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "2",
+            "Generate Excel Workbook",
+            lambda: generate_saved_plan_workbook_action(
+                service,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "3",
+            "Create New Version",
+            lambda: create_saved_plan_version_action(
+                service,
+                preferences,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "4",
             "View History",
             lambda: view_selected_plan_history_action(
                 service,
@@ -393,7 +436,40 @@ def run_selected_plan_menu(
                 output_func,
             ),
         ),
-        MenuOption("2", "Back", lambda: True),
+        MenuOption(
+            "5",
+            "Rename Plan",
+            lambda: rename_saved_plan_action(
+                service,
+                preferences,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "6",
+            "Duplicate Plan",
+            lambda: duplicate_saved_plan_action(
+                service,
+                preferences,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "7",
+            "Delete Plan",
+            lambda: delete_saved_plan_action(
+                service,
+                preferences,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("8", "Back", lambda: True),
     ]
 
     run_menu(
@@ -401,7 +477,233 @@ def run_selected_plan_menu(
         options=options,
         input_func=input_func,
         output_func=output_func,
+        title_renderer=lambda _title, output: render_plan_details(
+            service,
+            plan,
+            output,
+        ),
     )
+
+
+def render_plan_details(
+    service: PlanHistoryService,
+    plan,
+    output_func: OutputFunc = print,
+) -> None:
+    """Render details for one saved plan."""
+    print_section_header(f"Plan: {display_plan_name(plan)}", output_func)
+    if plan.description:
+        output_func(f"Description: {plan.description}")
+    output_func(f"Last updated: {format_saved_datetime(plan_updated_at(plan))}")
+    output_func(f"Versions: {version_count_label(service, plan)}")
+    output_func("")
+
+
+def view_latest_plan_summary_action(
+    service: PlanHistoryService,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Display the latest stored forecast summary for a saved plan."""
+    output_func("")
+    try:
+        version = latest_plan_version(service, plan)
+        output_func(service.plan_summary(version.id))
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+    wait_for_enter(input_func)
+    return False
+
+
+def generate_saved_plan_workbook_action(
+    service: PlanHistoryService,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Generate an Excel workbook from the selected plan's latest saved inputs."""
+    output_func("")
+    try:
+        config = config_from_plan_version(latest_plan_version(service, plan))
+        summaries, forecast, scenario_comparison, target_result = build_workbook_outputs(
+            config,
+        )
+        workbook_path = ExcelWriter().write(
+            summaries,
+            forecast,
+            scenario_comparison,
+            target_result,
+        )
+        verify_workbook_created(workbook_path)
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        print_success("Workbook created successfully.", output_func)
+        output_func("")
+        output_func("Location:")
+        output_func(str(workbook_path))
+    wait_for_enter(input_func)
+    return False
+
+
+def create_saved_plan_version_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Edit the latest saved plan assumptions and save a new version."""
+    output_func("")
+    try:
+        config = config_from_plan_version(latest_plan_version(service, plan))
+        setup = setup_from_config(display_plan_name(plan), config)
+        generated_plan = review_budget_setup(
+            setup,
+            input_func,
+            output_func,
+            collect_setup_debts,
+            collect_bills,
+            prompt_savings_strategy,
+            generate_plan_from_setup,
+        )
+        if generated_plan is None:
+            print_warning("New version cancelled.", output_func)
+            wait_for_enter(input_func)
+            return False
+        config = setup_from_generated_plan(generated_plan)
+        result = service.save_generated_plan(
+            name=plan.name,
+            plan_id=plan.id,
+            config=config,
+            forecast=generated_plan.forecast,
+            starting_savings=generated_plan.setup.current_savings,
+            starting_debts=generated_plan.setup.debts,
+            change_note="Saved from selected plan details",
+            source="interactive",
+            force=True,
+        )
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        preferences.mark_recent(result.plan.id, result.plan.name)
+        print_success(
+            f"Saved version {result.version.version_number} for {result.plan.name}.",
+            output_func,
+        )
+        wait_for_enter(input_func)
+        return True
+    wait_for_enter(input_func)
+    return False
+
+
+def rename_saved_plan_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Rename the selected plan without changing version history."""
+    output_func("")
+    new_name = input_func(f"New plan name [{display_plan_name(plan)}]: ").strip()
+    if not new_name:
+        print_warning("Plan name cannot be blank.", output_func)
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        renamed = service.rename_plan(plan.id, new_name)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    preferences.mark_recent(renamed.id, renamed.name)
+    print_success(f"Renamed plan to {renamed.name}.", output_func)
+    wait_for_enter(input_func)
+    return True
+
+
+def duplicate_saved_plan_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Duplicate the latest selected plan version as a new saved plan."""
+    output_func("")
+    new_name = input_func("New duplicate plan name: ").strip()
+    if not new_name:
+        print_warning("Plan name cannot be blank.", output_func)
+        wait_for_enter(input_func)
+        return False
+    try:
+        if any(existing.name == new_name for existing in service.list_plans()):
+            print_warning("A saved plan with that name already exists.", output_func)
+            wait_for_enter(input_func)
+            return False
+        config = config_from_plan_version(latest_plan_version(service, plan))
+        summaries, forecast, _scenario_comparison, _target_result = build_workbook_outputs(
+            config,
+        )
+        result = service.save_generated_plan(
+            name=new_name,
+            config=config,
+            forecast=forecast,
+            starting_savings=config.settings.starting_savings,
+            starting_debts=config.debts,
+            description=plan.description,
+            change_note=f"Duplicated from {display_plan_name(plan)}",
+            source="interactive",
+            pay_period_summaries=summaries,
+            force=True,
+        )
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        print_error(str(exc), output_func)
+    else:
+        preferences.mark_recent(result.plan.id, result.plan.name)
+        print_success(
+            f"Duplicated plan as {result.plan.name} with version 1.",
+            output_func,
+        )
+        wait_for_enter(input_func)
+        return True
+    wait_for_enter(input_func)
+    return False
+
+
+def delete_saved_plan_action(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    plan,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Permanently delete a selected saved plan after explicit confirmation."""
+    output_func("")
+    output_func(f"Plan: {display_plan_name(plan)}")
+    output_func(f"Versions: {version_count_label(service, plan)}")
+    confirm = input_func("Type DELETE to permanently remove this plan: ").strip()
+    if confirm != "DELETE":
+        print_warning("Delete cancelled.", output_func)
+        wait_for_enter(input_func)
+        return False
+
+    try:
+        service.archive_plan(plan.id)
+        service.delete_plan_permanently(plan.id, confirmation_name=plan.name)
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    preferences.remove_recent(plan.id)
+    print_success(f"Deleted plan {display_plan_name(plan)}.", output_func)
+    wait_for_enter(input_func)
+    return True
 
 
 def view_selected_plan_history_action(
@@ -411,10 +713,12 @@ def view_selected_plan_history_action(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """Display history for a selected plan without prompting for its ID."""
+    """Display history for a selected plan and allow version summary viewing."""
     output_func("")
     try:
-        display_plan_history(service, preferences, plan, output_func)
+        versions = display_plan_history(service, preferences, plan, output_func)
+        if versions:
+            select_plan_version_summary(service, versions, input_func, output_func)
     except (FileNotFoundError, ValueError) as exc:
         print_error(str(exc), output_func)
     wait_for_enter(input_func)
@@ -769,12 +1073,49 @@ def display_plan_history(
     preferences: RecentPlanPreferences,
     plan,
     output_func: OutputFunc = print,
-) -> None:
+) -> list:
     """Display versions for an already-selected plan."""
     versions = service.list_plan_versions(plan.id)
     preferences.mark_recent(plan.id, plan.name)
     output_func(f"Plan: {display_plan_name(plan)}")
     print_plan_versions(versions, output_func)
+    return versions
+
+
+def select_plan_version_summary(
+    service: PlanHistoryService,
+    versions,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> None:
+    """Allow the user to select a displayed version and view its summary."""
+    options = [
+        MenuOption(
+            str(index),
+            f"View Version {version.version_number}",
+            lambda version=version: version,
+        )
+        for index, version in enumerate(versions, start=1)
+    ]
+    back_key = str(len(options) + 1)
+    options.append(MenuOption(back_key, "Back", lambda: None))
+    display_menu("Select Version", options, output_func)
+    option_map = {option.key: option for option in options}
+    while True:
+        choice = input_func("Choose an option: ").strip()
+        option = option_map.get(choice)
+        if option is None:
+            print_warning(f"Please choose one of: {', '.join(option_map)}.", output_func)
+            continue
+        version = option.action()
+        if version is None:
+            return
+        try:
+            output_func("")
+            output_func(service.plan_summary(version.id))
+        except (FileNotFoundError, ValueError) as exc:
+            print_error(str(exc), output_func)
+        return
 
 
 def restore_version_by_id_action(
@@ -900,6 +1241,117 @@ def load_current_config() -> Config:
     return Config().load()
 
 
+def config_from_plan_version(version) -> Config:
+    """Rebuild a Config object from one saved immutable version snapshot."""
+    try:
+        snapshot = json.loads(version.config_snapshot)
+        return Config().load_mapping(snapshot)
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(
+            f"saved plan version {version.id} has an invalid config snapshot: {exc}",
+        ) from exc
+
+
+def latest_plan_version(service: PlanHistoryService, plan):
+    """Return the current version for a saved plan."""
+    current_version_id = getattr(plan, "current_version_id", None)
+    if current_version_id is not None:
+        return service.get_plan_version(current_version_id)
+    versions = service.list_plan_versions(plan.id)
+    if not versions:
+        raise ValueError("selected plan does not have any saved versions.")
+    return versions[-1]
+
+
+def setup_from_config(plan_name: str, config: Config) -> BudgetSetupResult:
+    """Convert a saved engine config into the interactive setup model."""
+    pay_frequency = PayFrequency(
+        getattr(config.settings, "pay_frequency", PayFrequency.BIWEEKLY.value)
+    )
+    monthly_personal = format_currency_decimal(
+        config.settings.personal_per_paycheck * PAYCHECKS_PER_MONTH[pay_frequency],
+    )
+    return BudgetSetupResult(
+        plan_name=plan_name,
+        pay_frequency=pay_frequency,
+        first_paycheck_date=config.settings.first_paycheck,
+        net_paycheck_amount=config.settings.paycheck,
+        debts=list(config.debts),
+        bills=list(config.bills),
+        monthly_personal_spending=monthly_personal,
+        current_savings=config.settings.starting_savings,
+        emergency_fund_target=config.settings.savings_goal,
+        savings_strategy=savings_strategy_from_config(config),
+    )
+
+
+def setup_from_generated_plan(generated_plan) -> Config:
+    """Return the existing engine config shape for a generated interactive plan."""
+    from app.plan_generation import setup_to_engine_config
+
+    return setup_to_engine_config(generated_plan.setup)
+
+
+def format_currency_decimal(value):
+    """Normalize a Decimal-compatible currency value for setup reuse."""
+    from app.money import money
+
+    return money(value)
+
+
+def savings_strategy_from_config(config: Config) -> SavingsStrategySelection:
+    """Infer the closest interactive savings strategy from existing settings."""
+    savings_percentage = getattr(
+        config.settings,
+        "savings_percentage_override",
+        None,
+    )
+    if savings_percentage is None:
+        return default_savings_strategy()
+    percent = Decimal(str(savings_percentage)) * Decimal("100")
+    if percent == Decimal("100"):
+        return SavingsStrategySelection(
+            SavingsStrategy.EMERGENCY_FIRST,
+            savings_percent=Decimal("100"),
+            snowball_percent=Decimal("0"),
+        )
+    if percent == Decimal("0"):
+        return SavingsStrategySelection(
+            SavingsStrategy.SNOWBALL,
+            savings_percent=Decimal("0"),
+            snowball_percent=Decimal("100"),
+        )
+    return SavingsStrategySelection(
+        SavingsStrategy.CUSTOM,
+        savings_percent=percent,
+        snowball_percent=Decimal("100") - percent,
+    )
+
+
+def build_workbook_outputs(config: Config):
+    """Build workbook inputs using the existing budget and forecast pipeline."""
+    calendar = CalendarEngine(config.settings)
+    periods = calendar.generate(date(2026, 12, 31))
+    forecast_config = deepcopy(config)
+    summaries = BudgetEngine(config).build_plan(periods)
+    forecast = ForecastEngine(forecast_config).forecast()
+    scenario_comparison = build_scenario_comparison(forecast_config)
+    target_result = build_debt_free_target_result(forecast_config)
+    return summaries, forecast, scenario_comparison, target_result
+
+
+def verify_workbook_created(path: str | Path) -> Path:
+    """Return a workbook path only after confirming the file exists."""
+    workbook_path = Path(path)
+    if not workbook_path.exists():
+        raise RuntimeError(f"workbook was not created: {workbook_path}")
+    if not workbook_path.is_file():
+        raise RuntimeError(f"workbook path is not a file: {workbook_path}")
+    if workbook_path.stat().st_size <= 0:
+        raise RuntimeError(f"workbook file is empty: {workbook_path}")
+    return workbook_path
+
+
 def save_current_plan(
     service: PlanHistoryService,
     config: Config,
@@ -934,19 +1386,10 @@ def save_current_plan(
 
 def generate_budget_plan() -> None:
     """Run the existing default budget-generation workflow."""
-    config = Config()
-    config.load()
-
-    calendar = CalendarEngine(config.settings)
-
-    periods = calendar.generate(date(2026, 12, 31))
-
-    forecast_config = deepcopy(config)
-    budget = BudgetEngine(config)
-    summaries = budget.build_plan(periods)
-    forecast = ForecastEngine(forecast_config).forecast()
-    scenario_comparison = build_scenario_comparison(forecast_config)
-    target_result = build_debt_free_target_result(forecast_config)
+    config = Config().load()
+    summaries, forecast, scenario_comparison, target_result = build_workbook_outputs(
+        config,
+    )
     workbook_path = ExcelWriter().write(
         summaries,
         forecast,

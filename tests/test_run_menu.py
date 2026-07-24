@@ -46,6 +46,10 @@ class FakePlanHistoryService:
         self.restore_error = None
         self.missing_get_plan_ids = set()
         self.restore_calls = []
+        self.renamed = []
+        self.deleted = []
+        self.archived = []
+        self.generated_saves = []
 
     def list_plans(self):
         return self.plans
@@ -126,6 +130,48 @@ class FakePlanHistoryService:
         self.restore_calls.append(version_id)
         self.restored_version.source_version_id = version_id
         return self.restored_version
+
+    def plan_summary(self, version_id):
+        return f"Summary for version {version_id}"
+
+    def rename_plan(self, plan_id, name):
+        plan = self.get_plan(plan_id)
+        renamed = SimpleNamespace(**{**vars(plan), "name": name})
+        self.plans = [renamed if item.id == plan_id else item for item in self.plans]
+        self.renamed.append((plan_id, name))
+        return renamed
+
+    def save_generated_plan(self, **kwargs):
+        plan_id = kwargs.get("plan_id")
+        if plan_id is None:
+            plan = SimpleNamespace(
+                id=len(self.plans) + 1,
+                name=kwargs["name"],
+                description=kwargs.get("description", ""),
+                updated_at="2026-07-24T20:15:00+00:00",
+                current_version_id=len(self.generated_saves) + 100,
+            )
+            self.plans.append(plan)
+            version_number = 1
+        else:
+            plan = self.get_plan(plan_id)
+            version_number = len(self.versions_by_plan.get(plan_id, [])) + 1
+        version = SimpleNamespace(
+            id=len(self.generated_saves) + 100,
+            plan_id=plan.id,
+            version_number=version_number,
+            created_at="2026-07-24T20:15:00+00:00",
+        )
+        self.versions_by_plan.setdefault(plan.id, []).append(version)
+        self.generated_saves.append(kwargs)
+        return SimpleNamespace(plan=plan, version=version, snapshot=SimpleNamespace(id=1))
+
+    def archive_plan(self, plan_id):
+        self.archived.append(plan_id)
+
+    def delete_plan_permanently(self, plan_id, *, confirmation_name, export_path=None):
+        self.deleted.append((plan_id, confirmation_name, export_path))
+        self.plans = [plan for plan in self.plans if plan.id != plan_id]
 
 
 class FakePreferences:
@@ -504,9 +550,9 @@ def test_saved_plans_list_populated_without_raw_ids() -> None:
     assert "plan ID" not in text
 
 
-def test_saved_plan_selection_opens_limited_actions() -> None:
-    """Selecting a saved plan exposes only currently reliable actions."""
-    choices = iter(["2", "1", "2", "2", "4"])
+def test_saved_plan_selection_opens_plan_details_actions() -> None:
+    """Selecting a saved plan exposes implemented plan-management actions."""
+    choices = iter(["2", "1", "8", "2", "4"])
     output = []
     service = FakePlanHistoryService(
         [SimpleNamespace(id=4, name="Current Plan", description="", updated_at="")]
@@ -523,17 +569,21 @@ def test_saved_plan_selection_opens_limited_actions() -> None:
 
     text = output_text(output)
     assert "Plan: Current Plan" in text
-    assert "1. View History" in text
-    assert "2. Back" in text
-    assert "Save New Version" not in text
-    assert "Restore Version" not in text
+    assert "1. View Latest Plan Summary" in text
+    assert "2. Generate Excel Workbook" in text
+    assert "3. Create New Version" in text
+    assert "4. View History" in text
+    assert "5. Rename Plan" in text
+    assert "6. Duplicate Plan" in text
+    assert "7. Delete Plan" in text
+    assert "8. Back" in text
     assert preferences.marked[0] == (4, "Current Plan")
 
 
 def test_saved_plan_history_displays_versions_without_raw_ids() -> None:
     """History belongs to a selected saved plan and avoids raw version IDs."""
     prompts = []
-    choices = iter(["2", "1", "1", "", "2", "2", "4"])
+    choices = iter(["2", "1", "4", "3", "", "8", "2", "4"])
     output = []
     service = FakePlanHistoryService(
         [SimpleNamespace(id=7, name="Plan 7", description="", updated_at="")]
@@ -572,6 +622,7 @@ def test_saved_plan_history_displays_versions_without_raw_ids() -> None:
     assert "Jul 22, 2026 at 2:00 AM" in text
     assert "Initial" in text
     assert "Updated" in text
+    assert "Select Version" in text
     assert "Version ID" not in text
     assert "Plan ID: " not in prompts
     assert preferences.marked[-1] == (7, "Plan 7")
@@ -595,6 +646,359 @@ def test_saved_plan_invalid_selection_returns_to_saved_plans() -> None:
     )
 
     assert "Warning: Please choose one of: 1, 2." in output
+
+
+def test_saved_plan_view_latest_summary() -> None:
+    """Plan details can show the latest saved summary."""
+    choices = iter(["2", "1", "1", "", "8", "2", "4"])
+    output = []
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(
+                id=4,
+                name="Current Plan",
+                description="",
+                updated_at="",
+                current_version_id=21,
+            )
+        ]
+    )
+    service.versions_by_plan[4] = [SimpleNamespace(id=21, version_number=1)]
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert "Summary for version 21" in output
+
+
+def test_saved_plan_workbook_generation_displays_path(monkeypatch, tmp_path) -> None:
+    """Plan details can generate a workbook and display the full path."""
+    choices = iter(["2", "1", "2", "", "8", "2", "4"])
+    output = []
+    workbook_path = tmp_path / "output" / "debtsnowball_plan.xlsx"
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(
+                id=4,
+                name="Current Plan",
+                description="",
+                updated_at="",
+                current_version_id=21,
+            )
+        ]
+    )
+    service.versions_by_plan[4] = [SimpleNamespace(id=21, version_number=1)]
+    monkeypatch.setattr(run, "config_from_plan_version", lambda _version: object())
+    monkeypatch.setattr(
+        run,
+        "build_workbook_outputs",
+        lambda _config: (["summary"], "forecast", "scenarios", "target"),
+    )
+
+    class FakeWriter:
+        def write(self, *_args):
+            workbook_path.parent.mkdir(parents=True, exist_ok=True)
+            workbook_path.write_bytes(b"workbook")
+            return workbook_path
+
+    monkeypatch.setattr(run, "ExcelWriter", lambda: FakeWriter())
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert "Success: Workbook created successfully." in output
+    assert "Location:" in output
+    assert str(workbook_path) in output
+
+
+def test_saved_plan_workbook_generation_failure_does_not_claim_success(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A missing workbook file reports failure and leaves the app open."""
+    choices = iter(["2", "1", "2", "", "8", "2", "4"])
+    output = []
+    missing_path = tmp_path / "output" / "missing.xlsx"
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(
+                id=4,
+                name="Current Plan",
+                description="",
+                updated_at="",
+                current_version_id=21,
+            )
+        ]
+    )
+    service.versions_by_plan[4] = [SimpleNamespace(id=21, version_number=1)]
+    monkeypatch.setattr(run, "config_from_plan_version", lambda _version: object())
+    monkeypatch.setattr(
+        run,
+        "build_workbook_outputs",
+        lambda _config: (["summary"], "forecast", "scenarios", "target"),
+    )
+
+    class MissingWriter:
+        def write(self, *_args):
+            return missing_path
+
+    monkeypatch.setattr(run, "ExcelWriter", lambda: MissingWriter())
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "Error: workbook was not created:" in text
+    assert "Workbook created successfully." not in text
+    assert text.count("Plan: Current Plan") >= 2
+
+
+def test_incomplete_saved_config_reports_clear_workbook_failure() -> None:
+    """Malformed saved config snapshots report the real failure without success."""
+    choices = iter(["2", "1", "2", "", "8", "2", "4"])
+    output = []
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(
+                id=4,
+                name="Current Plan",
+                description="",
+                updated_at="",
+                current_version_id=21,
+            )
+        ]
+    )
+    service.versions_by_plan[4] = [
+        SimpleNamespace(id=21, version_number=1, config_snapshot="{}")
+    ]
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "Error:" in text
+    assert "Workbook created successfully." not in text
+
+
+def test_guided_saved_plan_generates_physical_workbook(monkeypatch, tmp_path) -> None:
+    """A user-created saved plan can generate a real workbook from Saved Plans."""
+    monkeypatch.setenv("DEBTSNOWBALL_DATA_DIR", str(tmp_path))
+    workbook_path = tmp_path / "output" / "debtsnowball_plan.xlsx"
+    assert not workbook_path.parent.exists()
+    assert not workbook_path.exists()
+
+    first_run_choices = iter(
+        [
+            "1",
+            "Real User Plan",
+            "2",
+            "01/02/2026",
+            "1000",
+            "1",
+            "Debt A",
+            "100",
+            "0",
+            "10",
+            "10",
+            "n",
+            "4",
+            "1",
+            "n",
+            "4",
+            "1",
+            "0",
+            "1",
+            "0",
+            "0",
+            "2",
+            "1",
+            "4",
+            "",
+            "",
+            "5",
+            "2",
+            "1",
+            "2",
+            "",
+            "8",
+            "2",
+            "4",
+        ],
+    )
+    output = []
+
+    run.run_main_menu(
+        input_func=lambda _prompt: next(first_run_choices),
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "Success: Workbook created successfully." in text
+    assert str(workbook_path) in text
+    assert workbook_path.exists()
+    assert workbook_path.is_file()
+    assert workbook_path.stat().st_size > 0
+    assert "Success: Goodbye." in output
+
+    first_size = workbook_path.stat().st_size
+    workbook_path.write_bytes(b"stale")
+    assert workbook_path.stat().st_size == len(b"stale")
+
+    second_run_choices = iter(["2", "1", "2", "", "8", "2", "4"])
+    second_output = []
+    run.run_main_menu(
+        input_func=lambda _prompt: next(second_run_choices),
+        output_func=second_output.append,
+    )
+
+    second_text = output_text(second_output)
+    assert "Success: Workbook created successfully." in second_text
+    assert str(workbook_path) in second_text
+    assert workbook_path.read_bytes() != b"stale"
+    assert workbook_path.stat().st_size == first_size
+    assert workbook_path.stat().st_size > 0
+
+
+def test_saved_plan_rename_and_blank_rejection() -> None:
+    """Plan renaming rejects blanks and updates the plan through the service."""
+    choices = iter(["2", "1", "5", "   ", "", "5", "Renamed Plan", "", "2", "4"])
+    output = []
+    service = FakePlanHistoryService(
+        [SimpleNamespace(id=4, name="Current Plan", description="", updated_at="")]
+    )
+    preferences = FakePreferences()
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert "Warning: Plan name cannot be blank." in output
+    assert service.renamed == [(4, "Renamed Plan")]
+    assert preferences.marked[-1] == (4, "Renamed Plan")
+    assert "Success: Renamed plan to Renamed Plan." in output
+
+
+def test_saved_plan_duplicate_and_duplicate_name_rejection(monkeypatch) -> None:
+    """Plan duplication creates a new version-1 plan and rejects duplicate names."""
+    choices = iter(["2", "1", "6", "Current Plan", "", "6", "Copy Plan", "", "3", "4"])
+    output = []
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(id=4, name="Current Plan", description="", updated_at=""),
+        ]
+    )
+    service.versions_by_plan[4] = [SimpleNamespace(id=21, version_number=1)]
+    config = SimpleNamespace(
+        settings=SimpleNamespace(starting_savings=0),
+        debts=[],
+    )
+    monkeypatch.setattr(run, "config_from_plan_version", lambda _version: config)
+    monkeypatch.setattr(
+        run,
+        "build_workbook_outputs",
+        lambda _config: (["summary"], "forecast", None, None),
+    )
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert "Warning: A saved plan with that name already exists." in output
+    assert service.generated_saves[-1]["name"] == "Copy Plan"
+    assert service.generated_saves[-1]["force"] is True
+    assert "Success: Duplicated plan as Copy Plan with version 1." in output
+
+
+def test_saved_plan_delete_confirmation_and_cancellation() -> None:
+    """Plan deletion requires typing DELETE and removes only after confirmation."""
+    choices = iter(["2", "1", "7", "no", "", "7", "DELETE", "", "2", "4"])
+    output = []
+    service = FakePlanHistoryService(
+        [SimpleNamespace(id=4, name="Current Plan", description="", updated_at="")]
+    )
+    service.versions_by_plan[4] = [SimpleNamespace(id=21, version_number=1)]
+    preferences = FakePreferences([SimpleNamespace(id=4, name="Current Plan")])
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=lambda: preferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert "Warning: Delete cancelled." in output
+    assert service.archived == [4]
+    assert service.deleted == [(4, "Current Plan", None)]
+    assert preferences.recent_plans == []
+    assert "Success: Deleted plan Current Plan." in output
+
+
+def test_saved_plan_create_new_version(monkeypatch) -> None:
+    """Create New Version reuses the review flow and saves the generated result."""
+    choices = iter(["2", "1", "3", "", "2", "4"])
+    output = []
+    config = SimpleNamespace(settings=SimpleNamespace(), debts=[], bills=[])
+    generated = SimpleNamespace(
+        forecast="forecast",
+        setup=SimpleNamespace(current_savings=0, debts=[]),
+    )
+    service = FakePlanHistoryService(
+        [
+            SimpleNamespace(
+                id=4,
+                name="Current Plan",
+                description="",
+                updated_at="",
+                current_version_id=21,
+            )
+        ]
+    )
+    service.versions_by_plan[4] = [SimpleNamespace(id=21, version_number=1)]
+    monkeypatch.setattr(run, "config_from_plan_version", lambda _version: config)
+    monkeypatch.setattr(run, "setup_from_config", lambda _name, _config: object())
+    monkeypatch.setattr(run, "setup_from_generated_plan", lambda _plan: config)
+    monkeypatch.setattr(run, "review_budget_setup", lambda *_args: generated)
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert service.generated_saves[-1]["plan_id"] == 4
+    assert service.generated_saves[-1]["force"] is True
+    assert "Success: Saved version 2 for Current Plan." in output
 
 
 def test_menu_invalid_input_returns_to_menu() -> None:

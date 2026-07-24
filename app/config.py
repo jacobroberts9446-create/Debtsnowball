@@ -51,6 +51,10 @@ class Config:
                 parse_constant=lambda value: value,
             )
 
+        return self.load_mapping(data)
+
+    def load_mapping(self: Self, data: dict) -> Self:
+        """Load budget settings, bills, and debts from a parsed mapping."""
         budget = data["budget"]
 
         self.settings = BudgetSettings(
@@ -198,7 +202,7 @@ class Config:
             if not name:
                 raise ValueError(f"savings withdrawal {index} name is required.")
             withdrawal_date = self._iso_date(
-                raw_withdrawal.get("date"),
+                raw_withdrawal.get("date", raw_withdrawal.get("withdrawal_date")),
                 f"savings withdrawal {index} date",
             )
             if withdrawal_date < self.settings.first_paycheck:

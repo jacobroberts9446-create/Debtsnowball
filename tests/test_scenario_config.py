@@ -293,6 +293,46 @@ def test_baseline_only_workbook_generation_succeeds(tmp_path):
     workbook.close()
 
 
+def test_config_load_mapping_accepts_saved_snapshot_withdrawal_date():
+    """Saved config snapshots can be loaded without rewriting withdrawal dates."""
+    data = config_data()
+    data["savings_plan"] = {
+        "deadline_priority_enabled": False,
+        "goals": [],
+        "withdrawals": [
+            {
+                "name": "Saved withdrawal",
+                "withdrawal_date": "2026-01-16",
+                "amount": "25.00",
+            }
+        ],
+    }
+
+    config = Config().load_mapping(data)
+
+    assert config.savings_plan.withdrawals[0].withdrawal_date == date(2026, 1, 16)
+
+
+def test_config_load_mapping_accepts_legacy_withdrawal_date_key():
+    """Older config-shaped snapshots still load the legacy withdrawal date key."""
+    data = config_data()
+    data["savings_plan"] = {
+        "deadline_priority_enabled": False,
+        "goals": [],
+        "withdrawals": [
+            {
+                "name": "Legacy withdrawal",
+                "date": "2026-01-16",
+                "amount": "25.00",
+            }
+        ],
+    }
+
+    config = Config().load_mapping(data)
+
+    assert config.savings_plan.withdrawals[0].withdrawal_date == date(2026, 1, 16)
+
+
 def test_excel_contains_only_baseline_plus_configured_scenarios_in_order(tmp_path):
     config = load_config(
         tmp_path,

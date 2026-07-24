@@ -168,6 +168,20 @@ class HistoryRepository:
                 (updated_at, plan_id),
             )
 
+    def rename_plan(self, plan_id: int, name: str, updated_at: str) -> None:
+        """Rename a nonarchived plan."""
+        with self.transaction(foreign_keys=False) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE plans
+                SET name = ?, updated_at = ?
+                WHERE id = ? AND archived = 0
+                """,
+                (name, updated_at, plan_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"plan {plan_id} was not found.")
+
     def get_forecast_snapshot(self, snapshot_id: int) -> ForecastSnapshotRecord:
         """Return one persisted forecast snapshot record."""
         with self.connection() as conn:
