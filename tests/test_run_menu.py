@@ -288,6 +288,25 @@ def test_menu_generate_budget_plan_runs_existing_workflow_once() -> None:
     assert "3. History" in output
     assert "4. Help" in output
     assert "5. Exit" in output
+    assert "6. Create New Plan" in output
+
+
+def test_menu_create_new_plan_runs_debt_entry_workflow() -> None:
+    """Choosing Create New Plan runs debt entry without saving anything yet."""
+    calls = []
+    choices = iter(["6", "5"])
+    output = []
+
+    run.run_main_menu(
+        generate_budget_plan_func=lambda: None,
+        debt_entry_func=lambda **_kwargs: calls.append("debt-entry") or [],
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert calls == ["debt-entry"]
+    assert "Debt entry complete. Plan setup will continue in a later milestone." in output
+    assert "Success: Goodbye." in output
 
 
 def test_menu_help_explains_options_and_returns_to_menu() -> None:
@@ -304,6 +323,7 @@ def test_menu_help_explains_options_and_returns_to_menu() -> None:
 
     assert output.count("DebtSnowball v1.1.0") == 2
     assert "Generate Budget Plan: creates the budget plan and Excel workbook." in output
+    assert "Create New Plan: starts interactive setup for a new plan." in output
     assert "Saved Plans: lists saved plans or saves the current plan." in output
     assert "History: views, compares, or restores saved plan versions." in output
     assert "Help: explains the menu options." in output
@@ -979,7 +999,7 @@ def test_menu_invalid_input_returns_to_menu() -> None:
     )
 
     assert output.count("DebtSnowball v1.1.0") == 2
-    assert "Warning: Please choose one of: 1, 2, 3, 4, 5." in output
+    assert "Warning: Please choose one of: 1, 2, 3, 4, 5, 6." in output
     assert "Success: Goodbye." in output
 
 

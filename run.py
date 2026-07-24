@@ -20,6 +20,7 @@ from app.console import (
     print_table,
     print_warning,
 )
+from app.debt_input import collect_debts
 from app.excel_writer import ExcelWriter
 from app.forecast_engine import ForecastEngine
 from app.history import PlanHistoryService
@@ -55,6 +56,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
+    debt_entry_func: Callable[..., list | None] = collect_debts,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -66,6 +68,7 @@ def run_main_menu(
     config_loader = config_loader or load_current_config
     options = build_main_menu_options(
         generate_budget_plan_func,
+        debt_entry_func=debt_entry_func,
         plan_history_service_factory=plan_history_service_factory,
         preferences_factory=preferences_factory,
         config_loader=config_loader,
@@ -92,6 +95,7 @@ def render_main_menu_title(
 
 def build_main_menu_options(
     generate_budget_plan_func: Callable[[], None],
+    debt_entry_func: Callable[..., list | None] = collect_debts,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -133,7 +137,28 @@ def build_main_menu_options(
             lambda: show_menu_help(input_func=input_func, output_func=output_func),
         ),
         MenuOption("5", "Exit", lambda: exit_menu(output_func)),
+        MenuOption(
+            "6",
+            "Create New Plan",
+            lambda: run_create_new_plan_action(
+                debt_entry_func,
+                input_func=input_func,
+                output_func=output_func,
+            ),
+        ),
     ]
+
+
+def run_create_new_plan_action(
+    debt_entry_func: Callable[..., list | None],
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Run interactive debt entry for the first create-plan milestone."""
+    debts = debt_entry_func(input_func=input_func, output_func=output_func)
+    if debts is not None:
+        output_func("Debt entry complete. Plan setup will continue in a later milestone.")
+    return False
 
 
 def run_generate_budget_plan_action(generate_budget_plan_func: Callable[[], None]) -> bool:
@@ -772,6 +797,7 @@ def show_menu_help(
 ) -> bool:
     """Print brief help for the interactive menu before returning."""
     output_func("")
+    output_func("Create New Plan: starts interactive setup for a new plan.")
     output_func("Generate Budget Plan: creates the budget plan and Excel workbook.")
     output_func("Saved Plans: lists saved plans or saves the current plan.")
     output_func("History: views, compares, or restores saved plan versions.")
