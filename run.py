@@ -9,6 +9,7 @@ from datetime import date
 from typing import Callable
 
 from app.budget_engine import BudgetEngine
+from app.budget_setup import collect_budget_setup
 from app.calendar_engine import CalendarEngine
 from app.cli import CliDependencies, main as cli_main
 from app.config import Config
@@ -32,7 +33,6 @@ from app.menu import (
     wait_for_enter,
 )
 from app.money import format_currency
-from app.plan_setup import collect_plan_setup
 from app.preferences import RecentPlanPreferences
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
-    plan_setup_func: Callable[..., object | None] = collect_plan_setup,
+    plan_setup_func: Callable[..., object | None] = collect_budget_setup,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -95,7 +95,7 @@ def render_main_menu_title(
 
 def build_main_menu_options(
     generate_budget_plan_func: Callable[[], None],
-    plan_setup_func: Callable[..., object | None] = collect_plan_setup,
+    plan_setup_func: Callable[..., object | None] = collect_budget_setup,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -158,7 +158,7 @@ def run_create_new_plan_action(
     result = plan_setup_func(input_func=input_func, output_func=output_func)
     if result is not None:
         output_func("Plan setup complete.")
-        output_func("Bills and savings setup will continue in the next milestone.")
+        output_func("Plan generated in memory. Save and workbook setup will continue in a later milestone.")
     return False
 
 

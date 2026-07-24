@@ -306,7 +306,10 @@ def test_menu_create_new_plan_runs_debt_entry_workflow() -> None:
 
     assert calls == ["plan-setup"]
     assert "Plan setup complete." in output
-    assert "Bills and savings setup will continue in the next milestone." in output
+    assert (
+        "Plan generated in memory. Save and workbook setup will continue in a later milestone."
+        in output
+    )
     assert "Success: Goodbye." in output
 
 
