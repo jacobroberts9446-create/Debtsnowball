@@ -66,9 +66,17 @@ def review_bills(
     while True:
         print_bill_review(bills, output_func)
         options = [
-            MenuOption("1", "Add Another Bill", lambda: add_bill_action(bills, input_func, output_func)),
+            MenuOption(
+                "1",
+                "Add Another Bill",
+                lambda: add_bill_action(bills, input_func, output_func),
+            ),
             MenuOption("2", "Edit Bill", lambda: edit_bill_action(bills, input_func, output_func)),
-            MenuOption("3", "Remove Bill", lambda: remove_bill_action(bills, input_func, output_func)),
+            MenuOption(
+                "3",
+                "Remove Bill",
+                lambda: remove_bill_action(bills, input_func, output_func),
+            ),
             MenuOption("4", "Confirm", lambda: True),
             MenuOption("5", "Cancel", lambda: True),
         ]

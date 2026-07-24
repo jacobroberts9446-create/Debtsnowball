@@ -19,18 +19,26 @@ def sample_bill(name: str = "Rent", amount: str = "1200.00") -> Bill:
     return Bill(name, Decimal(amount), 1)
 
 
-def summary_stub():
+def summary_stub(setup=None):
     """Build a generated-plan summary stub."""
     return SimpleNamespace(
-        plan_name="Plan",
+        plan_name=getattr(setup, "plan_name", "Plan"),
+        pay_frequency=getattr(setup, "pay_frequency", None),
+        debts=getattr(setup, "debts", []),
+        bills=getattr(setup, "bills", []),
+        monthly_personal_spending=getattr(setup, "monthly_personal_spending", None),
+        current_savings=getattr(setup, "current_savings", None),
+        emergency_fund_target=getattr(setup, "emergency_fund_target", None),
         debt_count=1,
         total_starting_debt=Decimal("100.00"),
         projected_debt_free_date=date(2026, 8, 14),
         projected_payoff_duration_days=28,
         total_projected_interest=Decimal("0.00"),
+        total_projected_payments=Decimal("100.00"),
         first_period_snowball_amount=Decimal("50.00"),
         ending_savings=Decimal("500.00"),
         savings_goal_met=True,
+        setup=setup,
     )
 
 
@@ -53,7 +61,7 @@ def run_budget_setup(choices: list[str], *, debts=None, bills=None, generator=No
         calls["generated"].append(setup)
         if generator is not None:
             return generator(setup)
-        return summary_stub()
+        return summary_stub(setup)
 
     result = budget_setup.collect_budget_setup(
         input_func=lambda prompt: prompts.append(prompt) or next(inputs),
@@ -79,8 +87,8 @@ def test_valid_full_setup_generates_in_memory_summary() -> None:
     assert result.monthly_personal_spending == Decimal("300.00")
     assert result.current_savings == Decimal("500.00")
     assert result.emergency_fund_target == Decimal("400.00")
-    assert calls["generated"] == [result]
-    assert "Generated Plan Summary" in output
+    assert calls["generated"] == [result.setup]
+    assert "Full Plan Review" in output
 
 
 def test_zero_bills_zero_personal_and_zero_savings_are_valid() -> None:
@@ -126,6 +134,95 @@ def test_back_navigation_between_sections_restarts_previous_flow() -> None:
     assert result.plan_name == "New"
     assert result.pay_frequency == PayFrequency.BIWEEKLY
     assert len(calls["debt"]) == 2
+
+
+def test_debt_entry_back_navigation_restarts_setup_fields() -> None:
+    """Choosing back after cancelled debt entry returns to setup fields."""
+    debt_results = ["back", [sample_debt("New")]]
+
+    def debt_collector(*_args, **_kwargs):
+        return debt_results.pop(0)
+
+    output = []
+    prompts = []
+    choices = iter(
+        [
+            "Old",
+            "1",
+            "07/17/2026",
+            "1000",
+            "1",
+            "New",
+            "2",
+            "07/31/2026",
+            "2000",
+            "1",
+            "1",
+            "1",
+            "0",
+            "1",
+            "0",
+            "0",
+            "1",
+        ],
+    )
+
+    result = budget_setup.collect_budget_setup(
+        input_func=lambda prompt: prompts.append(prompt) or next(choices),
+        output_func=output.append,
+        debt_collector=debt_collector,
+        bill_collector=lambda **_kwargs: [sample_bill()],
+        generator=summary_stub,
+    )
+
+    assert result is not None
+    assert result.plan_name == "New"
+    assert result.pay_frequency == PayFrequency.BIWEEKLY
+
+
+def test_bill_entry_back_navigation_restarts_setup_fields() -> None:
+    """Choosing back after cancelled bill entry returns to setup fields."""
+    bill_results = ["back", [sample_bill("New Bill")]]
+
+    def bill_collector(**_kwargs):
+        return bill_results.pop(0)
+
+    output = []
+    prompts = []
+    choices = iter(
+        [
+            "Old",
+            "1",
+            "07/17/2026",
+            "1000",
+            "1",
+            "1",
+            "New",
+            "2",
+            "07/31/2026",
+            "2000",
+            "1",
+            "1",
+            "1",
+            "0",
+            "1",
+            "0",
+            "0",
+            "1",
+        ]
+    )
+
+    result = budget_setup.collect_budget_setup(
+        input_func=lambda prompt: prompts.append(prompt) or next(choices),
+        output_func=output.append,
+        debt_collector=lambda *_args, **_kwargs: [sample_debt()],
+        bill_collector=bill_collector,
+        generator=summary_stub,
+    )
+
+    assert result is not None
+    assert result.plan_name == "New"
+    assert result.bills[0].name == "New Bill"
 
 
 def test_cancellation_from_major_section_returns_none() -> None:
@@ -191,7 +288,7 @@ def test_editing_each_review_section() -> None:
         output_func=output.append,
         debt_collector=debt_collector,
         bill_collector=bill_collector,
-        generator=lambda _setup: summary_stub(),
+        generator=summary_stub,
     )
 
     assert result is not None
@@ -231,7 +328,7 @@ def test_generation_validation_failure_returns_to_review_and_can_retry() -> None
         attempts.append(setup)
         if len(attempts) == 1:
             raise ValueError("validation failed")
-        return summary_stub()
+        return summary_stub(setup)
 
     result, _prompts, output, _calls = run_budget_setup(
         [

@@ -58,29 +58,63 @@ def collect_budget_setup(
             return None
 
         debts = collect_debts_section([], input_func, output_func, debt_collector)
+        if debts == "back":
+            return collect_budget_setup(
+                input_func,
+                output_func,
+                debt_collector,
+                bill_collector,
+                generator,
+            )
         if debts is None:
             return None
         nav = prompt_section_navigation("Debts", True, input_func, output_func)
         if nav == "cancel":
             return None
         if nav == "back":
-            return collect_budget_setup(input_func, output_func, debt_collector, bill_collector, generator)
+            return collect_budget_setup(
+                input_func,
+                output_func,
+                debt_collector,
+                bill_collector,
+                generator,
+            )
 
         bills = collect_bills_section([], input_func, output_func, bill_collector)
+        if bills == "back":
+            return collect_budget_setup(
+                input_func,
+                output_func,
+                debt_collector,
+                bill_collector,
+                generator,
+            )
         if bills is None:
             return None
         nav = prompt_section_navigation("Recurring Bills", True, input_func, output_func)
         if nav == "cancel":
             return None
         if nav == "back":
-            return collect_budget_setup(input_func, output_func, debt_collector, bill_collector, generator)
+            return collect_budget_setup(
+                input_func,
+                output_func,
+                debt_collector,
+                bill_collector,
+                generator,
+            )
 
         personal = prompt_monthly_personal_spending(input_func, output_func)
         nav = prompt_section_navigation("Personal Spending", True, input_func, output_func)
         if nav == "cancel":
             return None
         if nav == "back":
-            return collect_budget_setup(input_func, output_func, debt_collector, bill_collector, generator)
+            return collect_budget_setup(
+                input_func,
+                output_func,
+                debt_collector,
+                bill_collector,
+                generator,
+            )
 
         current_savings, emergency_target = prompt_savings(input_func, output_func)
         setup = BudgetSetupResult(
@@ -137,8 +171,7 @@ def review_budget_setup(
                 except (ValueError, RuntimeError) as exc:
                     print_error(str(exc), output_func)
                     continue
-                print_generated_summary(summary, output_func)
-                return current
+                return summary
             if choice == "2":
                 basics = collect_basic_setup_fields(input_func, output_func)
                 current = replace_budget_setup(
@@ -156,6 +189,8 @@ def review_budget_setup(
                     debt_collector,
                     allow_back_to_review=True,
                 )
+                if debts == "back":
+                    continue
                 if debts is not None:
                     current = replace_budget_setup(current, debts=debts)
             elif choice == "4":
@@ -166,6 +201,8 @@ def review_budget_setup(
                     bill_collector,
                     allow_back_to_review=True,
                 )
+                if bills == "back":
+                    continue
                 if bills is not None:
                     current = replace_budget_setup(current, bills=bills)
             elif choice == "5":
@@ -199,7 +236,7 @@ def collect_debts_section(
     debt_collector,
     *,
     allow_back_to_review: bool = False,
-) -> list[Debt] | None:
+) -> list[Debt] | str | None:
     """Collect debts and resolve cancellation for this setup stage."""
     while True:
         result = debt_collector(
@@ -210,7 +247,7 @@ def collect_debts_section(
             allow_back_to_review=allow_back_to_review,
         )
         if result == "back":
-            return None
+            return "back"
         if result is not None:
             return result
         return None
@@ -223,7 +260,7 @@ def collect_bills_section(
     bill_collector,
     *,
     allow_back_to_review: bool = False,
-) -> list[Bill] | None:
+) -> list[Bill] | str | None:
     """Collect bills and resolve cancellation for this setup stage."""
     while True:
         bills = bill_collector(
@@ -243,7 +280,7 @@ def collect_bills_section(
         if action == "retry":
             continue
         if action == "back":
-            return None
+            return "back"
         return None
 
 
@@ -385,8 +422,16 @@ def print_full_review(setup: BudgetSetupResult, output_func: OutputFunc = print)
                 format_currency(sum((debt.minimum for debt in setup.debts), Decimal("0.00"))),
             ],
             ["MONTHLY BILLS", "Number of Bills", str(len(setup.bills))],
-            ["MONTHLY BILLS", "Total Monthly Bills", format_currency(total_monthly_bills(setup.bills))],
-            ["BUDGET", "Monthly Personal Spending", format_currency(setup.monthly_personal_spending)],
+            [
+                "MONTHLY BILLS",
+                "Total Monthly Bills",
+                format_currency(total_monthly_bills(setup.bills)),
+            ],
+            [
+                "BUDGET",
+                "Monthly Personal Spending",
+                format_currency(setup.monthly_personal_spending),
+            ],
             ["BUDGET", "Current Savings", format_currency(setup.current_savings)],
             ["BUDGET", "Emergency-Fund Target", format_currency(setup.emergency_fund_target)],
         ],

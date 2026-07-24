@@ -30,9 +30,11 @@ class GeneratedPlanSummary:
     projected_payoff_duration_days: int | None
     total_projected_interest: Decimal
     first_period_snowball_amount: Decimal
+    total_projected_payments: Decimal
     ending_savings: Decimal
     savings_goal_met: bool
     forecast: ForecastSummary
+    setup: object
 
 
 def generate_plan_from_setup(setup) -> GeneratedPlanSummary:
@@ -54,9 +56,13 @@ def generate_plan_from_setup(setup) -> GeneratedPlanSummary:
         projected_payoff_duration_days=duration,
         total_projected_interest=forecast.total_interest_paid,
         first_period_snowball_amount=first_period_snowball,
+        total_projected_payments=money(
+            forecast.total_minimum_payments + forecast.total_snowball_payments
+        ),
         ending_savings=forecast.ending_savings,
         savings_goal_met=forecast.ending_savings >= setup.emergency_fund_target,
         forecast=forecast,
+        setup=setup,
     )
 
 

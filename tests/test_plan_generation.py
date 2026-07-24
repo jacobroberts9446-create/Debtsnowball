@@ -80,13 +80,16 @@ def test_valid_setup_generates_plan_in_memory(monkeypatch) -> None:
                 starting_debt=Decimal("100.00"),
                 debt_free_date=date(2026, 7, 31),
                 total_interest_paid=Decimal("0.00"),
+                total_minimum_payments=Decimal("10.00"),
+                total_snowball_payments=Decimal("50.00"),
                 ending_savings=Decimal("1200.00"),
                 periods=[SimpleNamespace(snowball_paid=Decimal("50.00"))],
             )
 
     monkeypatch.setattr("app.plan_generation.ForecastEngine", FakeForecastEngine)
 
-    summary = generate_plan_from_setup(setup_result())
+    setup = setup_result()
+    summary = generate_plan_from_setup(setup)
 
     assert writes == ["forecasted"]
     assert summary.plan_name == "Plan"
@@ -95,7 +98,9 @@ def test_valid_setup_generates_plan_in_memory(monkeypatch) -> None:
     assert summary.projected_debt_free_date == date(2026, 7, 31)
     assert summary.projected_payoff_duration_days == 14
     assert summary.first_period_snowball_amount == Decimal("50.00")
+    assert summary.total_projected_payments == Decimal("60.00")
     assert summary.savings_goal_met is True
+    assert summary.setup is setup
 
 
 def test_no_database_or_workbook_generation_is_invoked(monkeypatch) -> None:

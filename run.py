@@ -34,6 +34,7 @@ from app.menu import (
 )
 from app.money import format_currency
 from app.preferences import RecentPlanPreferences
+from app.results_viewer import view_results
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
 
@@ -57,6 +58,7 @@ def main(argv: list[str] | None = None) -> None:
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
     plan_setup_func: Callable[..., object | None] = collect_budget_setup,
+    results_viewer_func: Callable[..., None] = view_results,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -69,6 +71,7 @@ def run_main_menu(
     options = build_main_menu_options(
         generate_budget_plan_func,
         plan_setup_func=plan_setup_func,
+        results_viewer_func=results_viewer_func,
         plan_history_service_factory=plan_history_service_factory,
         preferences_factory=preferences_factory,
         config_loader=config_loader,
@@ -96,6 +99,7 @@ def render_main_menu_title(
 def build_main_menu_options(
     generate_budget_plan_func: Callable[[], None],
     plan_setup_func: Callable[..., object | None] = collect_budget_setup,
+    results_viewer_func: Callable[..., None] = view_results,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -142,6 +146,7 @@ def build_main_menu_options(
             "Create New Plan",
             lambda: run_create_new_plan_action(
                 plan_setup_func,
+                results_viewer_func,
                 input_func=input_func,
                 output_func=output_func,
             ),
@@ -151,14 +156,19 @@ def build_main_menu_options(
 
 def run_create_new_plan_action(
     plan_setup_func: Callable[..., object | None],
+    results_viewer_func: Callable[..., None],
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
     """Run interactive setup for the create-plan milestone."""
     result = plan_setup_func(input_func=input_func, output_func=output_func)
     if result is not None:
+        results_viewer_func(result, input_func=input_func, output_func=output_func)
         output_func("Plan setup complete.")
-        output_func("Plan generated in memory. Save and workbook setup will continue in a later milestone.")
+        output_func(
+            "Plan generated in memory. "
+            "Save and workbook setup will continue in a later milestone."
+        )
     return False
 
 

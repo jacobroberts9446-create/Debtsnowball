@@ -296,15 +296,17 @@ def test_menu_create_new_plan_runs_debt_entry_workflow() -> None:
     calls = []
     choices = iter(["6", "5"])
     output = []
+    generated = object()
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
-        plan_setup_func=lambda **_kwargs: calls.append("plan-setup") or object(),
+        plan_setup_func=lambda **_kwargs: calls.append("plan-setup") or generated,
+        results_viewer_func=lambda result, **_kwargs: calls.append(("viewer", result)),
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
 
-    assert calls == ["plan-setup"]
+    assert calls == ["plan-setup", ("viewer", generated)]
     assert "Plan setup complete." in output
     assert (
         "Plan generated in memory. Save and workbook setup will continue in a later milestone."
