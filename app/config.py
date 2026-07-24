@@ -64,6 +64,7 @@ class Config:
             starting_savings=budget["starting_savings"],
             savings_goal=budget["savings_goal"],
             snowball_split=budget["snowball_split"],
+            savings_percentage_override=budget.get("savings_percentage_override"),
         )
 
         self.bills = [Bill(**bill) for bill in data["bills"]]

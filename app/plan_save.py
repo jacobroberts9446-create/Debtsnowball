@@ -1,12 +1,16 @@
 """Interactive save workflow for generated in-memory plans."""
 
+import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
 from app.console import OutputFunc, print_error, print_warning
+from app.database import DatabaseMigrationError
 from app.history import PlanHistoryService
 from app.menu import InputFunc, MenuOption, display_menu, wait_for_enter
 from app.plan_generation import setup_to_engine_config
+
+EXPECTED_SAVE_ERRORS = (ValueError, OSError, sqlite3.Error, DatabaseMigrationError)
 
 
 @dataclass
@@ -51,7 +55,7 @@ def run_save_plan_workflow(
             if state.saved
             else save_as_new_plan(generated_plan, state, service, input_func, output_func)
         )
-    except Exception as exc:
+    except EXPECTED_SAVE_ERRORS as exc:
         print_error(str(exc), output_func)
         wait_for_enter(input_func)
         return
@@ -118,26 +122,21 @@ def save_as_new_plan(
             return None
         return save_existing_plan_version(generated_plan, existing[0].id, service)
 
-    config = setup_to_engine_config(generated_plan.setup)
-    plan = service.create_plan(
-        name,
-        config,
+    result = service.save_generated_plan(
+        name=name,
+        config=setup_to_engine_config(generated_plan.setup),
+        forecast=generated_plan.forecast,
+        starting_savings=generated_plan.setup.current_savings,
+        starting_debts=generated_plan.setup.debts,
         change_note="Saved from interactive results viewer",
         source="interactive",
     )
-    version = latest_version_for_plan(service, plan.id)
-    snapshot = service.generate_and_save_forecast(
-        version.id,
-        generated_plan.forecast,
-        starting_savings=generated_plan.setup.current_savings,
-        starting_debts=generated_plan.setup.debts,
-    )
     return PlanSaveResult(
-        plan=plan,
-        version=version,
-        snapshot=snapshot,
-        created_new_plan=True,
-        created_new_version=True,
+        plan=result.plan,
+        version=result.version,
+        snapshot=result.snapshot,
+        created_new_plan=result.created_new_plan,
+        created_new_version=result.created_new_version,
     )
 
 
@@ -151,32 +150,24 @@ def save_existing_plan_version(
     """Save the generated plan as a version of an existing plan."""
     if plan_id is None:
         raise ValueError("A saved plan is required before saving a new version.")
-    existing_versions = service.list_plan_versions(plan_id)
-    previous_latest_id = existing_versions[-1].id if existing_versions else None
-    config = setup_to_engine_config(generated_plan.setup)
-    version = service.save_plan_version(
-        plan_id,
-        config,
+    result = service.save_generated_plan(
+        name="",
+        plan_id=plan_id,
+        config=setup_to_engine_config(generated_plan.setup),
+        forecast=generated_plan.forecast,
+        starting_savings=generated_plan.setup.current_savings,
+        starting_debts=generated_plan.setup.debts,
         change_note="Saved from interactive results viewer",
         source="interactive",
-        force=False,
     )
-    plan = service.get_plan(plan_id)
-    created_new_version = version.id not in {previous_version_id, previous_latest_id}
-    snapshot = None
-    if created_new_version:
-        snapshot = service.generate_and_save_forecast(
-            version.id,
-            generated_plan.forecast,
-            starting_savings=generated_plan.setup.current_savings,
-            starting_debts=generated_plan.setup.debts,
-        )
     return PlanSaveResult(
-        plan=plan,
-        version=version,
-        snapshot=snapshot,
+        plan=result.plan,
+        version=result.version,
+        snapshot=result.snapshot,
         created_new_plan=False,
-        created_new_version=created_new_version,
+        created_new_version=(
+            result.created_new_version and result.version.id != previous_version_id
+        ),
     )
 
 
@@ -192,14 +183,6 @@ def prompt_plan_name(
         if name.strip():
             return name.strip()
         print_warning("Plan name cannot be blank.", output_func)
-
-
-def latest_version_for_plan(service: PlanHistoryService, plan_id: int):
-    """Return the latest saved version for a plan."""
-    versions = service.list_plan_versions(plan_id)
-    if not versions:
-        raise ValueError("Saved plan did not create a version.")
-    return versions[-1]
 
 
 def mark_saved(state: PlanSaveState, result: PlanSaveResult) -> None:

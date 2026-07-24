@@ -103,6 +103,12 @@ class BudgetEngine:
         self.savings_balance = money(self.settings.starting_savings)
         self.extra_snowball_per_paycheck = money(extra_snowball_per_paycheck)
         self.savings_percentage_override = savings_percentage_override
+        if self.savings_percentage_override is None:
+            self.savings_percentage_override = getattr(
+                self.settings,
+                "savings_percentage_override",
+                None,
+            )
         self.savings_plan = getattr(config, "savings_plan", None)
         self._applied_withdrawal_indexes: set[int] = set()
         self._seen_stage_names: set[str] = set()

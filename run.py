@@ -37,8 +37,7 @@ from app.preferences import RecentPlanPreferences
 from app.results_viewer import view_results
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
-
-APP_VERSION = "1.1.0"
+from app.version import APP_VERSION
 
 
 def main(argv: list[str] | None = None) -> None:

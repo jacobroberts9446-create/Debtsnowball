@@ -126,6 +126,7 @@ class BudgetSettings:
     savings_goal: Decimal
 
     snowball_split: Decimal
+    savings_percentage_override: Decimal | None = None
 
     def __post_init__(self) -> None:
         self.paycheck = money(self.paycheck)
@@ -135,11 +136,19 @@ class BudgetSettings:
         self.starting_savings = money(self.starting_savings)
         self.savings_goal = money(self.savings_goal)
         self.snowball_split = to_decimal(self.snowball_split)
+        if self.savings_percentage_override is not None:
+            self.savings_percentage_override = to_decimal(
+                self.savings_percentage_override
+            )
 
         if self.paycheck < ZERO_MONEY:
             raise ValueError("paycheck cannot be negative.")
         if not Decimal("0") <= self.snowball_split <= Decimal("1"):
             raise ValueError("snowball_split must be between 0 and 1.")
+        if self.savings_percentage_override is not None and not (
+            Decimal("0") <= self.savings_percentage_override <= Decimal("1")
+        ):
+            raise ValueError("savings_percentage_override must be between 0 and 1.")
 
 
 # --------------------------------------------------
@@ -274,6 +283,17 @@ class ForecastSummary:
     planned_withdrawal_results: list["PlannedWithdrawalResult"] = field(
         default_factory=list
     )
+
+
+@dataclass(frozen=True)
+class GeneratedPlanSaveRecord:
+    """Atomic save result for a generated in-memory plan."""
+
+    plan: "Plan"
+    version: "PlanVersion"
+    snapshot: "ForecastSnapshotRecord | None"
+    created_new_plan: bool
+    created_new_version: bool
 
 
 @dataclass

@@ -56,63 +56,86 @@ class HistoryForecastService:
         warnings: list[DataQualityWarning] | None = None,
     ) -> ForecastSnapshotRecord:
         """Persist a forecast snapshot without mutating the plan version."""
-        warnings = warnings or []
-        forecast_hash = self.forecast_fingerprint(forecast)
         with self.repository.transaction() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO forecast_snapshots (
-                    plan_version_id,
-                    created_at,
-                    forecast_start_date,
-                    forecast_end_date,
-                    debt_free_date,
-                    total_projected_interest,
-                    total_projected_debt_payments,
-                    starting_debt,
-                    ending_debt,
-                    starting_savings,
-                    ending_savings,
-                    pay_period_count,
-                    forecast_fingerprint,
-                    status,
-                    warning_count
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    plan_version_id,
-                    self.utc_timestamp(),
-                    forecast.forecast_start_date.isoformat(),
-                    forecast.forecast_end_date.isoformat(),
-                    self.date_value(forecast.debt_free_date),
-                    to_cents(forecast.total_interest_paid),
-                    to_cents(
-                        forecast.total_minimum_payments
-                        + forecast.total_snowball_payments
-                    ),
-                    to_cents(forecast.starting_debt),
-                    to_cents(forecast.remaining_debt),
-                    to_cents(starting_savings),
-                    to_cents(forecast.ending_savings),
-                    len(forecast.periods),
-                    forecast_hash,
-                    "completed" if forecast.completed else "needs_review",
-                    len(warnings),
-                ),
-            )
-            snapshot_id = int(cursor.lastrowid)
-            self.save_forecast_periods(
+            snapshot_id = self.save_forecast_snapshot(
                 conn,
-                snapshot_id,
+                plan_version_id,
                 forecast,
-                starting_savings,
+                starting_savings=starting_savings,
                 pay_period_summaries=pay_period_summaries,
                 starting_debts=starting_debts,
+                warnings=warnings,
             )
-            self.save_warnings(conn, snapshot_id, warnings)
-            self.sync_snapshot_totals(conn, snapshot_id)
         return self.get_forecast_snapshot(snapshot_id)
+
+    def save_forecast_snapshot(
+        self,
+        conn: sqlite3.Connection,
+        plan_version_id: int,
+        forecast: ForecastSummary,
+        *,
+        starting_savings: Decimal,
+        pay_period_summaries: list[PayPeriodSummary] | None = None,
+        starting_debts: list[Any] | None = None,
+        warnings: list[DataQualityWarning] | None = None,
+    ) -> int:
+        """Persist a forecast snapshot using the caller's transaction."""
+        warnings = warnings or []
+        forecast_hash = self.forecast_fingerprint(forecast)
+        cursor = conn.execute(
+            """
+            INSERT INTO forecast_snapshots (
+                plan_version_id,
+                created_at,
+                forecast_start_date,
+                forecast_end_date,
+                debt_free_date,
+                total_projected_interest,
+                total_projected_debt_payments,
+                starting_debt,
+                ending_debt,
+                starting_savings,
+                ending_savings,
+                pay_period_count,
+                forecast_fingerprint,
+                status,
+                warning_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                plan_version_id,
+                self.utc_timestamp(),
+                forecast.forecast_start_date.isoformat(),
+                forecast.forecast_end_date.isoformat(),
+                self.date_value(forecast.debt_free_date),
+                to_cents(forecast.total_interest_paid),
+                to_cents(
+                    forecast.total_minimum_payments
+                    + forecast.total_snowball_payments
+                ),
+                to_cents(forecast.starting_debt),
+                to_cents(forecast.remaining_debt),
+                to_cents(starting_savings),
+                to_cents(forecast.ending_savings),
+                len(forecast.periods),
+                forecast_hash,
+                "completed" if forecast.completed else "needs_review",
+                len(warnings),
+            ),
+        )
+        snapshot_id = int(cursor.lastrowid)
+        self.save_forecast_periods(
+            conn,
+            snapshot_id,
+            forecast,
+            starting_savings,
+            pay_period_summaries=pay_period_summaries,
+            starting_debts=starting_debts,
+        )
+        self.save_warnings(conn, snapshot_id, warnings)
+        self.sync_snapshot_totals(conn, snapshot_id)
+        return snapshot_id
 
     def save_forecast_periods(
         self,

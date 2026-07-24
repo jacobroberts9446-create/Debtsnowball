@@ -5,8 +5,8 @@
 DebtSnowball builds a paycheck-by-paycheck debt payoff plan using a debt snowball strategy. It combines real calendar scheduling, savings goal tracking, debt interest calculations, and Excel reporting into a reproducible workflow driven by `config.json`.
 
 ![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
-![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
+![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
@@ -21,8 +21,11 @@ DebtSnowball builds a paycheck-by-paycheck debt payoff plan using a debt snowbal
 - Excel report generation
 - Dashboard worksheet
 - SQLite history support
+- Interactive plan setup
+- Interactive savings strategy selection
+- Generated plan review and save workflow
 - Automated test suite
-- 97% test coverage
+- 93% test coverage
 
 ---
 
@@ -92,10 +95,21 @@ python -m pip install -r requirements.txt
 
 ## Usage
 
-Run the application:
+Run the interactive application:
 
 ```bash
 python run.py
+```
+
+With no arguments, DebtSnowball opens an interactive console menu for generating
+the existing workbook or creating a new in-memory plan. The new-plan workflow
+collects plan basics, debts, recurring bills, spending, savings, and savings
+strategy, then lets you review and save the generated plan.
+
+Existing command-line workflows remain available. Show them with:
+
+```bash
+python run.py --help
 ```
 
 Run tests:
@@ -348,13 +362,29 @@ The Excel workbook includes:
 DebtSnowball/
 |
 |-- app/
+|   |-- bill_input.py
 |   |-- budget_engine.py
+|   |-- budget_setup.py
 |   |-- calendar_engine.py
+|   |-- cli.py
+|   |-- console.py
 |   |-- config.py
 |   |-- database.py
 |   |-- debt_engine.py
+|   |-- debt_input.py
 |   |-- excel_writer.py
+|   |-- forecast_engine.py
+|   |-- history/
+|   |-- menu.py
 |   |-- models.py
+|   |-- plan_generation.py
+|   |-- plan_save.py
+|   |-- plan_setup.py
+|   |-- results_viewer.py
+|   |-- savings_setup.py
+|   |-- scenario_engine.py
+|   |-- serialization.py
+|   |-- target_calculator.py
 |   `-- scheduler.py
 |-- tests/
 |-- output/
@@ -387,6 +417,9 @@ DebtSnowball/
 | ExcelWriter | Creates the Excel workbook, dashboard worksheet, data worksheets, and charts. |
 | Database | Provides SQLite persistence support for generated budget history. |
 | PlanHistoryService | Saves local plan versions, forecast snapshots, actual entries, comparisons, and exports. |
+| Interactive setup modules | Collect plan basics, debts, bills, spending, savings, and strategy through the console. |
+| ResultsViewer | Displays generated in-memory forecasts without rerunning the engine. |
+| PlanSave | Saves the reviewed generated forecast through the history service. |
 
 ---
 
@@ -526,7 +559,7 @@ Coverage is measured with `pytest-cov`:
 pytest --cov=app
 ```
 
-Current coverage: **97%**
+Current coverage: **93%**
 
 ---
 
@@ -535,8 +568,9 @@ Current coverage: **97%**
 | Version | Status | Focus |
 | --- | --- | --- |
 | Version 1.0 | Complete | Core scheduling, debt snowball calculations, savings tracking, Excel workbook generation, dashboard worksheet, and automated tests. |
-| Version 2 | In development | Forecast Engine complete, Scenario Comparison Engine complete, Scenario Comparison Reporting complete, Configurable Scenarios complete, Debt-Free Target Calculator complete, Dated Savings Goals and Planned Withdrawals complete, and Deadline-Aware Savings Priority in development. |
-| Version 3 | Future | User interface, deeper analytics, richer charts, saved history workflows, and interactive planning tools. |
+| Version 1.1 | Release candidate | Interactive plan setup, debt and bill entry, savings strategy selection, results review, and generated-plan saving. |
+| Version 2 | In development | Forecast Engine, Scenario Comparison, configurable scenarios, Debt-Free Target Calculator, dated savings goals, and deadline-aware savings priority. |
+| Version 3 | Future | Deeper analytics, richer charts, and additional user-interface polish. |
 
 ---
 

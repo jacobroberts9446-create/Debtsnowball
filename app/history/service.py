@@ -12,8 +12,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.database import Database, LATEST_SCHEMA_VERSION
 from app.budget_engine import PayPeriodSummary
+from app.database import Database, LATEST_SCHEMA_VERSION
 from app.history.comparison import HistoryComparisonService
 from app.history.exporter import PlanHistoryExporter
 from app.history.forecast import HistoryForecastService
@@ -34,13 +34,15 @@ from app.models import (
     ForecastPeriod,
     ForecastSnapshotRecord,
     ForecastSummary,
+    GeneratedPlanSaveRecord,
     Plan,
     PlanComparison,
     PlanVersion,
 )
 from app.serialization import dumps_json, to_json_ready
+from app.version import APP_VERSION
 
-APPLICATION_VERSION = "1.0.0"
+APPLICATION_VERSION = APP_VERSION
 FORECAST_ENGINE_VERSION = "2"
 EXPORT_FORMAT_VERSION = 1
 
@@ -363,6 +365,99 @@ class PlanHistoryService:
                     (version_id, utc_timestamp(), plan_id),
                 )
         return self.get_plan_version(version_id)
+
+    def save_generated_plan(
+        self,
+        *,
+        name: str,
+        config: Any,
+        forecast: ForecastSummary,
+        starting_savings: Decimal,
+        starting_debts: list[Any] | None = None,
+        plan_id: int | None = None,
+        description: str = "",
+        change_note: str = "Saved generated plan",
+        source: str = "interactive",
+        notes: str = "",
+        pay_period_summaries: list[PayPeriodSummary] | None = None,
+        warnings: list[DataQualityWarning] | None = None,
+        force: bool = False,
+    ) -> GeneratedPlanSaveRecord:
+        """Save generated inputs and their existing forecast atomically."""
+        snapshot = normalized_config_snapshot(config)
+        snapshot_json = canonical_json(snapshot)
+        config_hash = fingerprint(snapshot)
+        forecast_service = self._forecast_service()
+        created_new_plan = plan_id is None
+        snapshot_id = None
+
+        if plan_id is not None:
+            versions = self.list_plan_versions(plan_id)
+            if versions and versions[-1].config_fingerprint == config_hash and not force:
+                return GeneratedPlanSaveRecord(
+                    plan=self.get_plan(plan_id),
+                    version=versions[-1],
+                    snapshot=None,
+                    created_new_plan=False,
+                    created_new_version=False,
+                )
+            version_number = (versions[-1].version_number if versions else 0) + 1
+
+        with self.repository.transaction() as conn:
+            if plan_id is None:
+                timestamp = utc_timestamp()
+                cursor = conn.execute(
+                    """
+                    INSERT INTO plans (name, description, created_at, updated_at, notes)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (name, description, timestamp, timestamp, notes),
+                )
+                plan_id = int(cursor.lastrowid)
+                version_number = 1
+            else:
+                self._enable_plan_version_mutation(conn)
+                conn.execute(
+                    "UPDATE plan_versions SET active = 0 WHERE plan_id = ?",
+                    (plan_id,),
+                )
+                self._disable_plan_version_mutation(conn)
+
+            version_id = self._insert_plan_version(
+                conn,
+                plan_id=plan_id,
+                version_number=version_number,
+                config_snapshot=snapshot_json,
+                config_fingerprint=config_hash,
+                change_note=change_note,
+                source=source,
+                active=True,
+            )
+            conn.execute(
+                """
+                UPDATE plans
+                SET current_version_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (version_id, utc_timestamp(), plan_id),
+            )
+            snapshot_id = forecast_service.save_forecast_snapshot(
+                conn,
+                version_id,
+                forecast,
+                starting_savings=starting_savings,
+                pay_period_summaries=pay_period_summaries,
+                starting_debts=starting_debts,
+                warnings=warnings,
+            )
+
+        return GeneratedPlanSaveRecord(
+            plan=self.get_plan(plan_id),
+            version=self.get_plan_version(version_id),
+            snapshot=self.get_forecast_snapshot(snapshot_id),
+            created_new_plan=created_new_plan,
+            created_new_version=True,
+        )
 
     def generate_and_save_forecast(
         self,
@@ -793,6 +888,10 @@ def _normalize_config_object(config: Any) -> dict[str, Any]:
             "starting_savings": settings.starting_savings,
             "savings_goal": settings.savings_goal,
             "snowball_split": settings.snowball_split,
+            "savings_percentage_override": _normalize_config_value(
+                getattr(settings, "savings_percentage_override", None),
+                "savings_percentage_override",
+            ),
         },
         "bills": sorted((asdict(bill) for bill in config.bills), key=lambda item: item["name"]),
         "debts": sorted(

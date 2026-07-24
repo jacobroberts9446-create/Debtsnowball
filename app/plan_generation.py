@@ -6,7 +6,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from app.forecast_engine import ForecastEngine
-from app.models import BudgetSettings, ForecastSummary
+from app.models import BudgetSettings, DebtFreeTargetRequest, ForecastSummary
 from app.money import ZERO_MONEY, money
 from app.plan_setup import PayFrequency
 from app.savings_setup import savings_percentage_for_engine
@@ -41,11 +41,10 @@ class GeneratedPlanSummary:
 def generate_plan_from_setup(setup) -> GeneratedPlanSummary:
     """Generate an in-memory payoff plan from collected setup inputs."""
     config = setup_to_engine_config(setup)
+    savings_percentage = savings_percentage_for_engine(setup.savings_strategy)
     forecast = ForecastEngine(
         config,
-        savings_percentage_override=savings_percentage_for_engine(
-            setup.savings_strategy,
-        ),
+        savings_percentage_override=savings_percentage,
     ).forecast()
     first_period_snowball = (
         money(forecast.periods[0].snowball_paid) if forecast.periods else ZERO_MONEY
@@ -74,6 +73,7 @@ def generate_plan_from_setup(setup) -> GeneratedPlanSummary:
 
 def setup_to_engine_config(setup):
     """Translate interactive setup data to the shape expected by existing engines."""
+    savings_percentage = savings_percentage_for_engine(setup.savings_strategy)
     settings = BudgetSettings(
         paycheck=setup.net_paycheck_amount,
         first_paycheck=setup.first_paycheck_date,
@@ -86,6 +86,7 @@ def setup_to_engine_config(setup):
         starting_savings=setup.current_savings,
         savings_goal=setup.emergency_fund_target,
         snowball_split=Decimal("0.5"),
+        savings_percentage_override=savings_percentage,
     )
     settings.pay_frequency = setup.pay_frequency.value
     return SimpleNamespace(
@@ -93,7 +94,7 @@ def setup_to_engine_config(setup):
         bills=list(setup.bills),
         debts=list(setup.debts),
         scenarios=[],
-        debt_free_target=SimpleNamespace(enabled=False),
+        debt_free_target=DebtFreeTargetRequest(enabled=False),
         savings_plan=None,
     )
 

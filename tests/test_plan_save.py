@@ -1,14 +1,27 @@
 """Tests for saving generated in-memory plans."""
 
+import sqlite3
+import json
+from contextlib import closing
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from app.budget_setup import BudgetSetupResult
-from app.models import Bill, Debt
+from app.database import Database
+from app.forecast_engine import ForecastEngine
+from app.history import PlanHistoryService, forecast_fingerprint
+from app.models import Bill, BudgetSettings, Debt
+from app.plan_generation import generate_plan_from_setup, setup_to_engine_config
 from app.plan_save import PlanSaveState, run_save_plan_workflow
 from app.plan_setup import PayFrequency
-from app.savings_setup import default_savings_strategy
+from app.savings_setup import (
+    SavingsStrategy,
+    SavingsStrategySelection,
+    default_savings_strategy,
+)
 
 
 def setup_stub(name: str = "Plan") -> BudgetSetupResult:
@@ -52,9 +65,56 @@ class FakePlanHistoryService:
     def list_plans(self):
         return self.plans
 
+    def save_generated_plan(
+        self,
+        *,
+        name,
+        config,
+        forecast,
+        starting_savings,
+        starting_debts=None,
+        plan_id=None,
+        **kwargs,
+    ):
+        if plan_id is None:
+            plan = self.create_plan(name, config, **kwargs)
+            version = self.list_plan_versions(plan.id)[-1]
+            snapshot = self.generate_and_save_forecast(
+                version.id,
+                forecast,
+                starting_savings=starting_savings,
+                starting_debts=starting_debts,
+            )
+            return SimpleNamespace(
+                plan=plan,
+                version=version,
+                snapshot=snapshot,
+                created_new_plan=True,
+                created_new_version=True,
+            )
+
+        existing_versions = list(self.list_plan_versions(plan_id))
+        version = self.save_plan_version(plan_id, config, **kwargs)
+        created_new_version = version not in existing_versions
+        snapshot = None
+        if created_new_version:
+            snapshot = self.generate_and_save_forecast(
+                version.id,
+                forecast,
+                starting_savings=starting_savings,
+                starting_debts=starting_debts,
+            )
+        return SimpleNamespace(
+            plan=self.get_plan(plan_id),
+            version=version,
+            snapshot=snapshot,
+            created_new_plan=False,
+            created_new_version=created_new_version,
+        )
+
     def create_plan(self, name, config, **kwargs):
         if self.fail_on == "create":
-            raise RuntimeError("database unavailable")
+            raise sqlite3.OperationalError("database unavailable")
         plan = SimpleNamespace(id=len(self.plans) + 1, name=name, config=config, **kwargs)
         version = SimpleNamespace(
             id=plan.id * 10,
@@ -297,4 +357,284 @@ def test_no_regeneration_or_workbook_generation(monkeypatch) -> None:
 
     assert state.saved
     assert service.forecasts
+    assert calls == []
+
+
+def test_unexpected_runtime_error_is_not_swallowed() -> None:
+    """Programmer errors are not converted into ordinary save failures."""
+
+    class BrokenService(FakePlanHistoryService):
+        def save_generated_plan(self, **_kwargs):
+            raise RuntimeError("programming error")
+
+    with pytest.raises(RuntimeError, match="programming error"):
+        run_save([""], service=BrokenService())
+
+
+def integration_setup(
+    strategy: SavingsStrategySelection | None = None,
+    *,
+    name: str = "Replay Plan",
+    balance: Decimal = Decimal("300.00"),
+) -> BudgetSetupResult:
+    """Build a small real setup for integration save tests."""
+    return BudgetSetupResult(
+        plan_name=name,
+        pay_frequency=PayFrequency.BIWEEKLY,
+        first_paycheck_date=date(2026, 7, 17),
+        net_paycheck_amount=Decimal("500.00"),
+        debts=[Debt("Visa", balance, Decimal("0"), Decimal("25.00"), 1, 1)],
+        bills=[],
+        monthly_personal_spending=Decimal("0.00"),
+        current_savings=Decimal("0.00"),
+        emergency_fund_target=Decimal("300.00"),
+        savings_strategy=strategy or default_savings_strategy(),
+    )
+
+
+def service_for_tmp_db(tmp_path) -> PlanHistoryService:
+    """Return a history service backed by a temp SQLite database."""
+    return PlanHistoryService(Database(tmp_path / "history.sqlite"))
+
+
+def save_generated(service: PlanHistoryService, setup: BudgetSetupResult, *, plan_id=None):
+    """Generate once and atomically save that generated forecast."""
+    generated = generate_plan_from_setup(setup)
+    result = service.save_generated_plan(
+        name=setup.plan_name,
+        plan_id=plan_id,
+        config=setup_to_engine_config(setup),
+        forecast=generated.forecast,
+        starting_savings=setup.current_savings,
+        starting_debts=setup.debts,
+        change_note="integration save",
+        source="test",
+    )
+    return generated, result
+
+
+def config_from_snapshot(snapshot: dict) -> SimpleNamespace:
+    """Rebuild an engine config from a persisted normalized config snapshot."""
+    budget = snapshot["budget"]
+    settings = BudgetSettings(
+        paycheck=Decimal(str(budget["paycheck"])),
+        first_paycheck=date.fromisoformat(budget["first_paycheck"]),
+        rent_per_paycheck=Decimal(str(budget["rent_per_paycheck"])),
+        insurance_per_paycheck=Decimal(str(budget["insurance_per_paycheck"])),
+        personal_per_paycheck=Decimal(str(budget["personal_per_paycheck"])),
+        starting_savings=Decimal(str(budget["starting_savings"])),
+        savings_goal=Decimal(str(budget["savings_goal"])),
+        snowball_split=Decimal(str(budget["snowball_split"])),
+        savings_percentage_override=None
+        if budget.get("savings_percentage_override") is None
+        else Decimal(str(budget["savings_percentage_override"])),
+    )
+    settings.pay_frequency = budget.get("pay_frequency", PayFrequency.BIWEEKLY.value)
+    return SimpleNamespace(
+        settings=settings,
+        bills=[
+            Bill(
+                row["name"],
+                Decimal(str(row["amount"])),
+                int(row["due_day"]),
+            )
+            for row in snapshot["bills"]
+        ],
+        debts=[
+            Debt(
+                row["name"],
+                Decimal(str(row["balance"])),
+                Decimal(str(row["apr"])),
+                Decimal(str(row["minimum"])),
+                int(row["due_day"]),
+                int(row["snowball_order"]),
+            )
+            for row in snapshot["debts"]
+        ],
+        scenarios=[],
+        debt_free_target=SimpleNamespace(enabled=False),
+        savings_plan=None,
+    )
+
+
+def table_count(service: PlanHistoryService, table: str) -> int:
+    """Return a table row count for integration assertions."""
+    with closing(sqlite3.connect(service.database.path)) as conn:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+@pytest.mark.parametrize(
+    ("strategy", "expected_override"),
+    [
+        (
+            SavingsStrategySelection(
+                SavingsStrategy.EMERGENCY_FIRST,
+                Decimal("100"),
+                Decimal("0"),
+            ),
+            "1",
+        ),
+        (default_savings_strategy(), None),
+        (
+            SavingsStrategySelection(
+                SavingsStrategy.SNOWBALL,
+                Decimal("0"),
+                Decimal("100"),
+            ),
+            "0",
+        ),
+        (
+            SavingsStrategySelection(
+                SavingsStrategy.CUSTOM,
+                Decimal("25"),
+                Decimal("75"),
+            ),
+            "0.25",
+        ),
+    ],
+)
+def test_saved_strategy_replays_reviewed_forecast(
+    tmp_path,
+    strategy,
+    expected_override,
+) -> None:
+    """Saved config snapshots reproduce each reviewed savings strategy."""
+    service = service_for_tmp_db(tmp_path)
+    setup = integration_setup(strategy)
+    generated, result = save_generated(service, setup)
+    saved_snapshot = json.loads(result.version.config_snapshot)
+
+    assert saved_snapshot["budget"]["savings_percentage_override"] == expected_override
+
+    replayed = ForecastEngine(config_from_snapshot(saved_snapshot)).forecast()
+
+    assert forecast_fingerprint(replayed) == forecast_fingerprint(generated.forecast)
+    assert replayed.debt_free_date == generated.forecast.debt_free_date
+    assert replayed.total_interest_paid == generated.forecast.total_interest_paid
+    assert replayed.ending_savings == generated.forecast.ending_savings
+    assert [p.savings_contribution for p in replayed.periods] == [
+        p.savings_contribution for p in generated.forecast.periods
+    ]
+    assert [p.snowball_paid for p in replayed.periods] == [
+        p.snowball_paid for p in generated.forecast.periods
+    ]
+
+
+def test_atomic_save_new_plan_successfully_persists_forecast(tmp_path) -> None:
+    """A new generated plan save persists plan, version, and forecast rows."""
+    service = service_for_tmp_db(tmp_path)
+    generated, result = save_generated(service, integration_setup())
+
+    assert result.created_new_plan is True
+    assert result.created_new_version is True
+    assert result.snapshot is not None
+    assert result.snapshot.forecast_fingerprint == forecast_fingerprint(
+        generated.forecast
+    )
+    assert table_count(service, "plans") == 1
+    assert table_count(service, "plan_versions") == 1
+    assert table_count(service, "forecast_snapshots") == 1
+    assert table_count(service, "forecast_periods") == len(generated.forecast.periods)
+
+
+def test_atomic_save_new_version_and_save_as_new_plan(tmp_path) -> None:
+    """Existing-plan version saves and separate new-plan saves use the atomic path."""
+    service = service_for_tmp_db(tmp_path)
+    _generated, first = save_generated(service, integration_setup(name="Base"))
+    changed_setup = integration_setup(name="Base", balance=Decimal("500.00"))
+
+    _changed, second = save_generated(service, changed_setup, plan_id=first.plan.id)
+    _copy, copied = save_generated(service, integration_setup(name="Copy"))
+
+    assert second.plan.id == first.plan.id
+    assert second.version.version_number == 2
+    assert copied.created_new_plan is True
+    assert copied.plan.name == "Copy"
+    assert table_count(service, "plans") == 2
+    assert table_count(service, "plan_versions") == 3
+    assert table_count(service, "forecast_snapshots") == 3
+
+
+def test_duplicate_unchanged_save_creates_no_version_or_snapshot(tmp_path) -> None:
+    """Duplicate unchanged generated saves do not add versions or snapshots."""
+    service = service_for_tmp_db(tmp_path)
+    setup = integration_setup()
+    _generated, first = save_generated(service, setup)
+    _duplicate, second = save_generated(service, setup, plan_id=first.plan.id)
+
+    assert second.created_new_version is False
+    assert second.version.id == first.version.id
+    assert second.snapshot is None
+    assert table_count(service, "plan_versions") == 1
+    assert table_count(service, "forecast_snapshots") == 1
+
+
+class FailingForecastService:
+    """Controlled failure seam for atomic save rollback tests."""
+
+    def save_forecast_snapshot(self, *_args, **_kwargs):
+        raise sqlite3.OperationalError("snapshot failed")
+
+
+def test_forecast_snapshot_failure_rolls_back_new_plan(tmp_path, monkeypatch) -> None:
+    """Forecast persistence failure leaves no partial new plan rows."""
+    service = service_for_tmp_db(tmp_path)
+    monkeypatch.setattr(service, "_forecast_service", lambda: FailingForecastService())
+
+    with pytest.raises(sqlite3.OperationalError, match="snapshot failed"):
+        save_generated(service, integration_setup())
+
+    assert table_count(service, "plans") == 0
+    assert table_count(service, "plan_versions") == 0
+    assert table_count(service, "forecast_snapshots") == 0
+
+
+def test_forecast_snapshot_failure_rolls_back_new_version_and_retry(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Failed version saves roll back and retry succeeds once."""
+    service = service_for_tmp_db(tmp_path)
+    _generated, first = save_generated(service, integration_setup())
+    changed_setup = integration_setup(balance=Decimal("500.00"))
+
+    monkeypatch.setattr(service, "_forecast_service", lambda: FailingForecastService())
+    with pytest.raises(sqlite3.OperationalError, match="snapshot failed"):
+        save_generated(service, changed_setup, plan_id=first.plan.id)
+
+    assert table_count(service, "plans") == 1
+    assert table_count(service, "plan_versions") == 1
+    assert table_count(service, "forecast_snapshots") == 1
+
+    monkeypatch.delattr(service, "_forecast_service")
+    _changed, retry = save_generated(service, changed_setup, plan_id=first.plan.id)
+    _duplicate, duplicate = save_generated(service, changed_setup, plan_id=first.plan.id)
+
+    assert retry.version.version_number == 2
+    assert duplicate.created_new_version is False
+    assert table_count(service, "plan_versions") == 2
+    assert table_count(service, "forecast_snapshots") == 2
+
+
+def test_atomic_save_does_not_rerun_forecast_or_workbook(tmp_path, monkeypatch) -> None:
+    """Saving consumes the generated forecast without rerunning output boundaries."""
+    calls = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("called")
+        raise AssertionError("should not be called")
+
+    generated = generate_plan_from_setup(integration_setup())
+    monkeypatch.setattr("app.plan_generation.ForecastEngine", forbidden)
+    monkeypatch.setattr("app.excel_writer.ExcelWriter", forbidden)
+
+    service = service_for_tmp_db(tmp_path)
+    service.save_generated_plan(
+        name=generated.plan_name,
+        config=setup_to_engine_config(generated.setup),
+        forecast=generated.forecast,
+        starting_savings=generated.setup.current_savings,
+        starting_debts=generated.setup.debts,
+    )
+
     assert calls == []
