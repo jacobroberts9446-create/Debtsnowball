@@ -299,13 +299,14 @@ def test_menu_create_new_plan_runs_debt_entry_workflow() -> None:
 
     run.run_main_menu(
         generate_budget_plan_func=lambda: None,
-        debt_entry_func=lambda **_kwargs: calls.append("debt-entry") or [],
+        plan_setup_func=lambda **_kwargs: calls.append("plan-setup") or object(),
         input_func=lambda _prompt: next(choices),
         output_func=output.append,
     )
 
-    assert calls == ["debt-entry"]
-    assert "Debt entry complete. Plan setup will continue in a later milestone." in output
+    assert calls == ["plan-setup"]
+    assert "Plan setup complete." in output
+    assert "Bills and savings setup will continue in the next milestone." in output
     assert "Success: Goodbye." in output
 
 

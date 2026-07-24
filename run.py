@@ -20,7 +20,6 @@ from app.console import (
     print_table,
     print_warning,
 )
-from app.debt_input import collect_debts
 from app.excel_writer import ExcelWriter
 from app.forecast_engine import ForecastEngine
 from app.history import PlanHistoryService
@@ -33,6 +32,7 @@ from app.menu import (
     wait_for_enter,
 )
 from app.money import format_currency
+from app.plan_setup import collect_plan_setup
 from app.preferences import RecentPlanPreferences
 from app.scenario_engine import ScenarioEngine
 from app.target_calculator import DebtFreeTargetCalculator
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def run_main_menu(
     generate_budget_plan_func: Callable[[], None] | None = None,
-    debt_entry_func: Callable[..., list | None] = collect_debts,
+    plan_setup_func: Callable[..., object | None] = collect_plan_setup,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -68,7 +68,7 @@ def run_main_menu(
     config_loader = config_loader or load_current_config
     options = build_main_menu_options(
         generate_budget_plan_func,
-        debt_entry_func=debt_entry_func,
+        plan_setup_func=plan_setup_func,
         plan_history_service_factory=plan_history_service_factory,
         preferences_factory=preferences_factory,
         config_loader=config_loader,
@@ -95,7 +95,7 @@ def render_main_menu_title(
 
 def build_main_menu_options(
     generate_budget_plan_func: Callable[[], None],
-    debt_entry_func: Callable[..., list | None] = collect_debts,
+    plan_setup_func: Callable[..., object | None] = collect_plan_setup,
     plan_history_service_factory: Callable[[], PlanHistoryService] = PlanHistoryService,
     preferences_factory: Callable[[], RecentPlanPreferences] = RecentPlanPreferences,
     config_loader: Callable[[], Config] | None = None,
@@ -141,7 +141,7 @@ def build_main_menu_options(
             "6",
             "Create New Plan",
             lambda: run_create_new_plan_action(
-                debt_entry_func,
+                plan_setup_func,
                 input_func=input_func,
                 output_func=output_func,
             ),
@@ -150,14 +150,15 @@ def build_main_menu_options(
 
 
 def run_create_new_plan_action(
-    debt_entry_func: Callable[..., list | None],
+    plan_setup_func: Callable[..., object | None],
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """Run interactive debt entry for the first create-plan milestone."""
-    debts = debt_entry_func(input_func=input_func, output_func=output_func)
-    if debts is not None:
-        output_func("Debt entry complete. Plan setup will continue in a later milestone.")
+    """Run interactive setup for the create-plan milestone."""
+    result = plan_setup_func(input_func=input_func, output_func=output_func)
+    if result is not None:
+        output_func("Plan setup complete.")
+        output_func("Bills and savings setup will continue in the next milestone.")
     return False
 
 

@@ -1,6 +1,7 @@
 """Interactive debt-entry workflow for console plan setup."""
 
 from collections.abc import Callable
+from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 
 from app.console import OutputFunc, print_success, print_table, print_warning
@@ -12,14 +13,17 @@ from app.money import format_currency, money, to_decimal
 def collect_debts(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
+    initial_debts: list[Debt] | None = None,
 ) -> list[Debt] | None:
     """Collect debts interactively and return confirmed Debt objects."""
-    debts: list[Debt] = []
+    debts: list[Debt] = [] if initial_debts is None else deepcopy(initial_debts)
+    normalize_snowball_order(debts)
 
-    while True:
-        debts.append(prompt_debt(len(debts) + 1, input_func, output_func))
-        if not prompt_yes_no("Add another debt? [y/N]: ", input_func):
-            break
+    if initial_debts is None:
+        while True:
+            debts.append(prompt_debt(len(debts) + 1, input_func, output_func))
+            if not prompt_yes_no("Add another debt? [y/N]: ", input_func):
+                break
 
     return review_debts(debts, input_func, output_func)
 
