@@ -8,7 +8,10 @@ from openpyxl import load_workbook
 from app.config import Config
 from app.excel_writer import ExcelWriter
 from app.models import DebtFreeTargetStatus
-from run import build_debt_free_target_result, build_scenario_comparison
+from app.workflows.workbook_export import (
+    build_debt_free_target_result,
+    build_scenario_comparison,
+)
 
 
 def config_data(scenarios_marker="missing", target_marker="missing"):

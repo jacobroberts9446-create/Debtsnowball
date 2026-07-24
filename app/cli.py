@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from app.excel_writer import ExcelWriter
 from app.history import PlanHistoryService
 from app.models import ActualEntryType
+from app.workflows.workbook_export import write_history_report
 
 
 @dataclass(frozen=True)
@@ -229,23 +229,6 @@ def run_actual_command(
             source="cli",
         )
         output(f"Added balance observation {observation.id}")
-
-
-def write_history_report(service: PlanHistoryService, plan_id: int, path: str) -> None:
-    """Write a detailed local history workbook for a saved plan."""
-    plan = service.get_plan(plan_id)
-    details = service.history_report_rows(plan_id)
-    workbook_path = ExcelWriter(path).write_history_report(
-        plan,
-        service.list_plan_versions(plan_id),
-        actual_comparison=service.compare_forecast_to_actual(plan_id),
-        forecast_snapshots=details["forecast_snapshots"],
-        actual_periods=service.compare_forecast_to_actual_periods(plan_id),
-        debt_history=details["debt_history"],
-        savings_history=details["savings_history"],
-        warnings=details["warnings"],
-    )
-    print(f"History report created: {workbook_path}")
 
 
 def _default_dependencies() -> CliDependencies:
