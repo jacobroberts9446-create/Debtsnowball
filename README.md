@@ -5,7 +5,7 @@
 DebtSnowball builds a paycheck-by-paycheck debt payoff plan using a debt snowball strategy. It combines real calendar scheduling, savings goal tracking, debt interest calculations, and Excel reporting into a reproducible workflow driven by `config.json`.
 
 ![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
-![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
+![Version](https://img.shields.io/badge/version-1.2.0--dev-yellow)
 ![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -101,10 +101,19 @@ Run the interactive application:
 python run.py
 ```
 
-With no arguments, DebtSnowball opens an interactive console menu for generating
-the existing workbook or creating a new in-memory plan. The new-plan workflow
-collects plan basics, debts, recurring bills, spending, savings, and savings
-strategy, then lets you review and save the generated plan.
+With no arguments, DebtSnowball opens an interactive console menu. The normal
+workflow is:
+
+1. Create New Plan
+2. Enter debts, bills, budget, and savings strategy
+3. Review the generated forecast
+4. Save the plan under a meaningful name
+5. Access separate scenarios or people's plans through Saved Plans
+6. View prior saved versions through History on the selected plan
+
+The guided new-plan workflow collects plan basics, debts, recurring bills,
+spending, savings, and savings strategy, then lets you review and save the
+generated plan.
 
 Existing command-line workflows remain available. Show them with:
 
@@ -124,11 +133,71 @@ Run tests with coverage:
 pytest --cov=app
 ```
 
-The generated workbook is written to:
+Developer and automation workflows that use `config.json` remain available
+through the command-line interface and source-level helpers. The interactive
+menu does not present config generation as the normal user workflow.
+
+When workbook generation is run, the workbook is written to:
 
 ```text
 output/debtsnowball_plan.xlsx
 ```
+
+---
+
+## Portable Windows Build
+
+DebtSnowball can be packaged as a portable Windows console executable. This is
+not an installer; it creates a folder that can be zipped and shared.
+
+Install build dependencies:
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
+Build the executable on Windows:
+
+```bash
+python scripts/build_windows.py
+```
+
+The build output appears at:
+
+```text
+dist/DebtSnowball/DebtSnowball.exe
+```
+
+End users launch the portable build by opening the `dist/DebtSnowball` folder
+and double-clicking `DebtSnowball.exe`. The executable opens the existing
+interactive console menu and does not require Python to be installed on the
+target machine.
+
+When running from source, DebtSnowball continues to use the repository paths:
+
+```text
+config.json
+output/
+```
+
+When running from the packaged executable, writable user data is stored under:
+
+```text
+%LOCALAPPDATA%/DebtSnowball
+```
+
+Packaged defaults include:
+
+```text
+%LOCALAPPDATA%/DebtSnowball/output/debtsnowball.sqlite
+%LOCALAPPDATA%/DebtSnowball/output/debtsnowball_plan.xlsx
+%LOCALAPPDATA%/DebtSnowball/output/preferences.json
+```
+
+The packaged app reads `%LOCALAPPDATA%/DebtSnowball/config.json` when that file
+exists. Otherwise, it uses the bundled `config.json` shipped with the portable
+folder. Custom icons, an installer, automatic updates, and GitHub release
+packaging are planned for later milestones.
 
 ---
 
@@ -491,9 +560,13 @@ Developer rules for future database work:
 
 ## Local Plan History
 
-DebtSnowball can now keep durable local plan history in SQLite. The default
-`python run.py` workflow still generates the normal workbook without requiring
-saved history.
+DebtSnowball can keep durable local plan history in SQLite. In the interactive
+app, Saved Plans represent separate scenarios or separate people, such as
+`My Aggressive Plan`, `My Conservative Plan`, or `Mom's Debt Plan`.
+
+History belongs to one selected saved plan and represents that plan's prior
+saved versions. Open `Saved Plans`, choose a plan by name, then choose
+`View History`.
 
 Optional history features include:
 
@@ -597,3 +670,4 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 ## Author
 
 Jacob Roberts
+

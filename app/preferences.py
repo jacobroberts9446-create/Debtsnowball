@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.paths import default_preferences_path
+
 
 MAX_RECENT_PLANS = 5
-DEFAULT_PREFERENCES_PATH = Path("output/preferences.json")
 
 
 @dataclass(frozen=True)
@@ -22,8 +23,8 @@ class RecentPlan:
 class RecentPlanPreferences:
     """JSON-backed preferences for recently used saved plans."""
 
-    def __init__(self, path: str | Path = DEFAULT_PREFERENCES_PATH) -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = default_preferences_path() if path is None else Path(path)
 
     def list_recent_plans(self) -> list[RecentPlan]:
         """Return validated recent plans, most recent first."""

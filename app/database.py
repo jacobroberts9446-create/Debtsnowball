@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from app.money import from_cents, money, to_cents
+from app.paths import default_database_path
 
 LATEST_SCHEMA_VERSION = 4
 HISTORY_SCHEMA_VERSION = 3
@@ -117,8 +118,8 @@ class DatabaseMigrationError(RuntimeError):
 class Database:
     """Persist generated budget plans to SQLite."""
 
-    def __init__(self, filename: str | Path = "output/debtsnowball.sqlite") -> None:
-        self.path = Path(filename)
+    def __init__(self, filename: str | Path | None = None) -> None:
+        self.path = default_database_path() if filename is None else Path(filename)
         self.last_backup_path: Path | None = None
 
     def initialize(self) -> None:

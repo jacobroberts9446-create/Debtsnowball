@@ -24,7 +24,7 @@ from app.models import (
 class HistoryRepository:
     """Direct SQLite persistence operations for history services."""
 
-    def __init__(self, database: Database | str | Path) -> None:
+    def __init__(self, database: Database | str | Path | None) -> None:
         self.database = database if isinstance(database, Database) else Database(database)
 
     def initialize(self) -> None:

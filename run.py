@@ -5,7 +5,7 @@ DebtSnowball
 """
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime
 from typing import Callable
 
 from app.budget_engine import BudgetEngine
@@ -120,11 +120,6 @@ def build_main_menu_options(
         ),
         MenuOption(
             "2",
-            "Generate Plan From Config",
-            lambda: run_generate_budget_plan_action(generate_budget_plan_func),
-        ),
-        MenuOption(
-            "3",
             "Saved Plans",
             lambda: run_saved_plans_menu(
                 plan_history_service_factory=plan_history_service_factory,
@@ -135,21 +130,11 @@ def build_main_menu_options(
             ),
         ),
         MenuOption(
-            "4",
-            "History",
-            lambda: run_history_menu(
-                plan_history_service_factory=plan_history_service_factory,
-                preferences_factory=preferences_factory,
-                input_func=input_func,
-                output_func=output_func,
-            ),
-        ),
-        MenuOption(
-            "5",
+            "3",
             "Help",
             lambda: show_menu_help(input_func=input_func, output_func=output_func),
         ),
-        MenuOption("6", "Exit", lambda: exit_menu(output_func)),
+        MenuOption("4", "Exit", lambda: exit_menu(output_func)),
     ]
 
 
@@ -167,10 +152,18 @@ def run_create_new_plan_action(
     return False
 
 
-def run_generate_budget_plan_action(generate_budget_plan_func: Callable[[], None]) -> bool:
-    """Run budget generation and exit the interactive menu."""
-    generate_budget_plan_func()
-    return True
+def run_generate_budget_plan_action(
+    generate_budget_plan_func: Callable[[], None],
+    output_func: OutputFunc = print,
+) -> bool:
+    """Run budget generation and return to the interactive menu."""
+    try:
+        generate_budget_plan_func()
+    except SystemExit as exc:
+        print_error(f"Plan generation stopped unexpectedly: {exc}", output_func)
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        print_error(str(exc), output_func)
+    return False
 
 
 def run_saved_plans_menu(
@@ -189,44 +182,82 @@ def run_saved_plans_menu(
         print_error(str(exc), output_func)
         wait_for_enter(input_func)
         return False
-    options = [
-        MenuOption(
-            "1",
-            "Recent Plans",
-            lambda: list_recent_plans_action(
-                service,
-                preferences,
-                config_loader,
-                input_func,
-                output_func,
-            ),
-        ),
-        MenuOption(
-            "2",
-            "List All Saved Plans",
-            lambda: list_saved_plans_action(service, input_func, output_func),
-        ),
-        MenuOption(
-            "3",
-            "Save Current Plan",
-            lambda: save_current_plan_action(
-                service,
-                preferences,
-                config_loader,
-                input_func,
-                output_func,
-            ),
-        ),
-        MenuOption("4", "Back", lambda: True),
-    ]
 
-    run_menu(
-        title="Saved Plans",
-        options=options,
+    run_saved_plan_selection_loop(
+        service,
+        preferences,
+        config_loader,
         input_func=input_func,
         output_func=output_func,
     )
     return False
+
+
+def run_saved_plan_selection_loop(
+    service: PlanHistoryService,
+    preferences: RecentPlanPreferences,
+    config_loader: Callable[[], Config],
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> None:
+    """Show saved plans as scenarios or people and open the selected plan."""
+    while True:
+        output_func("")
+        print_section_header("Saved Plans", output_func)
+        try:
+            plans = service.list_plans()
+        except ValueError as exc:
+            print_error(str(exc), output_func)
+            wait_for_enter(input_func)
+            return
+
+        if not plans:
+            output_func("No saved plans yet.")
+            output_func("Create a new plan and save it to see it here.")
+            wait_for_enter(input_func)
+            return
+
+        for index, plan in enumerate(plans, start=1):
+            output_func(f"{index}. {display_plan_name(plan)}")
+            output_func(f"   Updated: {format_saved_datetime(plan_updated_at(plan))}")
+            output_func(f"   Versions: {version_count_label(service, plan)}")
+            if plan.description:
+                output_func(f"   Description: {plan.description}")
+            output_func("")
+
+        back_key = str(len(plans) + 1)
+        output_func(f"{back_key}. Back")
+        output_func("")
+        choice = input_func("Choose an option: ").strip()
+        if choice == back_key:
+            return
+
+        try:
+            selected_index = int(choice)
+        except ValueError:
+            print_warning(f"Please choose one of: {valid_choice_label(len(plans))}.", output_func)
+            continue
+
+        if not 1 <= selected_index <= len(plans):
+            print_warning(f"Please choose one of: {valid_choice_label(len(plans))}.", output_func)
+            continue
+
+        plan = plans[selected_index - 1]
+        try:
+            current_plan = service.get_plan(plan.id)
+        except (FileNotFoundError, ValueError) as exc:
+            print_error(str(exc), output_func)
+            wait_for_enter(input_func)
+            continue
+        preferences.mark_recent(current_plan.id, current_plan.name)
+        run_selected_plan_menu(
+            service,
+            preferences,
+            config_loader,
+            current_plan,
+            input_func=input_func,
+            output_func=output_func,
+        )
 
 
 def list_saved_plans_action(
@@ -242,16 +273,16 @@ def list_saved_plans_action(
         print_error(str(exc), output_func)
     else:
         if not plans:
-            output_func("No saved plans found.")
+            output_func("No saved plans yet.")
+            output_func("Create a new plan and save it to see it here.")
         else:
-            print_table(
-                ["ID", "Name", "Description"],
-                [
-                    [str(plan.id), plan.name, plan.description or ""]
-                    for plan in plans
-                ],
-                output_func,
-            )
+            for index, plan in enumerate(plans, start=1):
+                output_func(f"{index}. {display_plan_name(plan)}")
+                output_func(f"   Updated: {format_saved_datetime(plan_updated_at(plan))}")
+                output_func(f"   Versions: {version_count_label(service, plan)}")
+                if plan.description:
+                    output_func(f"   Description: {plan.description}")
+                output_func("")
 
     wait_for_enter(input_func)
     return False
@@ -275,14 +306,15 @@ def list_recent_plans_action(
             return False
         if not recent_plans:
             output_func("")
-            output_func("No recent plans found.")
+            output_func("No saved plans yet.")
+            output_func("Create a new plan and save it to see it here.")
             wait_for_enter(input_func)
             return False
 
         options = [
             MenuOption(
                 str(index),
-                f"{plan.id:<3} {plan.name}",
+                display_plan_name(plan),
                 lambda plan=plan: open_recent_plan_action(
                     service,
                     preferences,
@@ -361,34 +393,11 @@ def run_selected_plan_menu(
                 output_func,
             ),
         ),
-        MenuOption(
-            "2",
-            "Save New Version",
-            lambda: save_selected_plan_version_action(
-                service,
-                preferences,
-                config_loader,
-                plan,
-                input_func,
-                output_func,
-            ),
-        ),
-        MenuOption(
-            "3",
-            "Restore Version",
-            lambda: restore_selected_plan_version_action(
-                service,
-                preferences,
-                plan,
-                input_func,
-                output_func,
-            ),
-        ),
-        MenuOption("4", "Back", lambda: True),
+        MenuOption("2", "Back", lambda: True),
     ]
 
     run_menu(
-        title=f"Plan: {plan.name}",
+        title=f"Plan: {display_plan_name(plan)}",
         options=options,
         input_func=input_func,
         output_func=output_func,
@@ -610,18 +619,16 @@ def view_plan_history_action(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """Prompt for a plan ID and display saved versions."""
+    """Let the user select a saved plan and display its versions."""
     output_func("")
-    plan_id = prompt_positive_int("Plan ID: ", input_func, output_func)
-    if plan_id is None:
+    try:
+        plan = select_saved_plan_for_history(service, input_func, output_func)
+    except (FileNotFoundError, ValueError) as exc:
+        print_error(str(exc), output_func)
         wait_for_enter(input_func)
         return False
 
-    try:
-        plan = service.get_plan(plan_id)
-    except (FileNotFoundError, ValueError) as exc:
-        print_error(str(exc), output_func)
-    else:
+    if plan is not None:
         try:
             display_plan_history(service, preferences, plan, output_func)
         except (FileNotFoundError, ValueError) as exc:
@@ -629,6 +636,82 @@ def view_plan_history_action(
 
     wait_for_enter(input_func)
     return False
+
+
+def select_saved_plan_for_history(
+    service: PlanHistoryService,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+):
+    """Display saved plans and return the selected plan, or None for Back."""
+    plans = service.list_plans()
+    if not plans:
+        output_func("No saved plans found.")
+        return None
+
+    rows = []
+    for index, plan in enumerate(plans, start=1):
+        rows.append(
+            [
+                str(index),
+                plan.name,
+                getattr(plan, "updated_at", "") or getattr(plan, "created_at", ""),
+                version_count_label(service, plan),
+            ]
+        )
+    print_table(["#", "Plan", "Updated", "Versions"], rows, output_func)
+
+    back_key = str(len(plans) + 1)
+    options = [
+        *[
+            MenuOption(str(index), plan.name, lambda plan=plan: plan)
+            for index, plan in enumerate(plans, start=1)
+        ],
+        MenuOption(back_key, "Back", lambda: None),
+    ]
+    display_menu("Select Plan", options, output_func)
+    option_map = {option.key: option for option in options}
+    while True:
+        choice = input_func("Choose an option: ").strip()
+        option = option_map.get(choice)
+        if option is not None:
+            return option.action()
+        print_warning(f"Please choose one of: {', '.join(option_map)}.", output_func)
+
+
+def version_count_label(service: PlanHistoryService, plan) -> str:
+    """Return a displayable version count when available."""
+    try:
+        return str(len(service.list_plan_versions(plan.id)))
+    except (FileNotFoundError, ValueError):
+        return "Unknown"
+
+
+def display_plan_name(plan) -> str:
+    """Return the best user-facing saved-plan name available."""
+    name = getattr(plan, "name", "") or ""
+    return name.strip() or "Untitled Plan"
+
+
+def plan_updated_at(plan) -> str:
+    """Return the best available saved-plan update timestamp."""
+    return getattr(plan, "updated_at", "") or getattr(plan, "created_at", "")
+
+
+def format_saved_datetime(value: str | None) -> str:
+    """Format saved-plan timestamps for console display."""
+    if not value:
+        return "Not available"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return f"{parsed:%b} {parsed.day}, {parsed:%Y at %I:%M %p}".replace(" 0", " ")
+
+
+def valid_choice_label(plan_count: int) -> str:
+    """Return a readable list of valid saved-plan menu choices."""
+    return ", ".join(str(index) for index in range(1, plan_count + 2))
 
 
 def compare_versions_action(
@@ -690,6 +773,7 @@ def display_plan_history(
     """Display versions for an already-selected plan."""
     versions = service.list_plan_versions(plan.id)
     preferences.mark_recent(plan.id, plan.name)
+    output_func(f"Plan: {display_plan_name(plan)}")
     print_plan_versions(versions, output_func)
 
 
@@ -756,12 +840,11 @@ def print_plan_versions(
         return
 
     print_table(
-        ["ID", "Version", "Created", "Status", "Note"],
+        ["Version", "Saved", "Status", "Note"],
         [
             [
-                str(version.id),
-                f"v{version.version_number}",
-                version.created_at,
+                f"Version {version.version_number}",
+                format_saved_datetime(version.created_at),
                 "active" if version.active else "",
                 version.change_note or "",
             ]
@@ -804,9 +887,8 @@ def show_menu_help(
     """Print brief help for the interactive menu before returning."""
     output_func("")
     output_func("Create New Plan: starts the guided interactive setup workflow.")
-    output_func("Generate Plan From Config: creates the workbook from config.json.")
-    output_func("Saved Plans: lists saved plans or saves the current plan.")
-    output_func("History: views, compares, or restores saved plan versions.")
+    output_func("Saved Plans: opens separate scenarios or people's saved plans.")
+    output_func("History: select a saved plan, then view its prior versions.")
     output_func("Help: explains the menu options.")
     output_func("Exit: closes DebtSnowball without generating a plan.")
     wait_for_enter(input_func)
@@ -918,7 +1000,8 @@ def generate_budget_plan() -> None:
 
         print()
 
-    print_success(f"Workbook created: {workbook_path}")
+    print_success("Excel workbook created:")
+    print(workbook_path)
 
 def build_scenario_comparison(config):
     """Build baseline plus configured scenario forecasts."""

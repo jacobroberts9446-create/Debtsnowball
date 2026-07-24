@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0-dev] - Unreleased
+
+### Added
+- Portable Windows executable launcher build
+- Packaged-app path handling for bundled resources and writable user data
+- PyInstaller one-folder build configuration
+
 ## [1.1.0] - Unreleased
 
 ### Added

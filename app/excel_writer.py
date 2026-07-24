@@ -29,13 +29,14 @@ from app.models import (
     ScenarioComparison,
     ScenarioResult,
 )
+from app.paths import default_workbook_path
 
 
 class ExcelWriter:
     """Creates a simple workbook from PayPeriodSummary objects."""
 
-    def __init__(self, filename: str | Path = "output/debtsnowball_plan.xlsx") -> None:
-        self.path = Path(filename)
+    def __init__(self, filename: str | Path | None = None) -> None:
+        self.path = default_workbook_path() if filename is None else Path(filename)
 
     def write(
         self,

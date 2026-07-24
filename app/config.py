@@ -20,6 +20,7 @@ from app.models import (
     SavingsPlan,
     ScenarioDefinition,
 )
+from app.paths import default_config_path
 
 
 class Config:
@@ -34,13 +35,13 @@ class Config:
         self.debt_free_target = DebtFreeTargetRequest(enabled=False)
         self.savings_plan: SavingsPlan | None = None
 
-    def load(self: Self, filename: str | Path = "config.json") -> Self:
+    def load(self: Self, filename: str | Path | None = None) -> Self:
         """Load budget settings, bills, and debts from a JSON file."""
 
-        path = Path(filename)
+        path = default_config_path() if filename is None else Path(filename)
 
         if not path.exists():
-            raise FileNotFoundError(f"{filename} not found.")
+            raise FileNotFoundError(f"{path} not found.")
 
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(

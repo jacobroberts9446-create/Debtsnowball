@@ -228,7 +228,7 @@ def build_warnings(
 class PlanHistoryService:
     """High-level API for durable local plan history."""
 
-    def __init__(self, database: Database | str | Path = "output/debtsnowball.sqlite") -> None:
+    def __init__(self, database: Database | str | Path | None = None) -> None:
         self.repository = HistoryRepository(database)
         self.database = self.repository.database
         self.repository.initialize()

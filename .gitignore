@@ -15,8 +15,14 @@ __pycache__/
 # Generated files
 output/
 history/
+build/
+dist/
 !app/history/
 !app/history/*.py
+
+# PyInstaller
+*.toc
+*.pyz
 
 # SQLite
 *.db
