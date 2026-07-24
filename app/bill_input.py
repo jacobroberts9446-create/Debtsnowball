@@ -164,7 +164,7 @@ def print_bill_review(bills: list[Bill], output_func: OutputFunc = print) -> Non
             output_func,
         )
     else:
-        print_warning("No recurring bills entered.", output_func)
+        output_func("No recurring bills entered.")
     output_func(f"Total Monthly Bills: {format_currency(total_monthly_bills(bills))}")
 
 

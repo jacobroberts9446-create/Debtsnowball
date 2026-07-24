@@ -57,7 +57,7 @@ def test_valid_weekly_setup() -> None:
     assert result.first_paycheck_date == date(2026, 7, 17)
     assert result.net_paycheck_amount == Decimal("2000.00")
     assert result.debts[0].name == "Visa"
-    assert "Success: Accepted date: 07/17/2026" in output
+    assert "Success: Accepted date: Jul 17, 2026" in output
 
 
 def test_valid_biweekly_setup() -> None:
@@ -283,3 +283,4 @@ def test_collect_plan_setup_with_real_preloaded_debt_editor() -> None:
     assert result is not None
     assert result.debts[0].name == "Edited"
     assert result.debts[0].balance == Decimal("125.00")
+

@@ -98,7 +98,7 @@ def test_results_summary_displays_available_engine_values() -> None:
     assert "Total Starting Debt" in text
     assert "$100.00" in text
     assert "Projected Debt-Free Date" in text
-    assert "2026-08-14" in text
+    assert "Aug 14, 2026" in text
     assert "Total Projected Payments" in text
     assert "$105.00" in text
     assert "Emergency-Fund Status" in text
@@ -115,6 +115,15 @@ def test_results_summary_handles_missing_optional_values() -> None:
     assert "Not available." in output_text(output)
 
 
+def test_results_summary_describes_immediate_payoff() -> None:
+    """A zero-day payoff reads clearly in the summary."""
+    generated = generated_stub()
+    generated.projected_payoff_duration_days = 0
+    output = run_viewer(["5"], generated)
+
+    assert "Paid off on the first paycheck" in output_text(output)
+
+
 def test_debt_summary_table_formatting() -> None:
     """Debt summary displays debt details and payoff dates."""
     output = run_viewer(["1", "1", "5"])
@@ -124,7 +133,7 @@ def test_debt_summary_table_formatting() -> None:
     assert "Debt | Starting Balance | APR" in text
     assert "Visa" in text
     assert "12.50%" in text
-    assert "2026-08-14" in text
+    assert "Aug 14, 2026" in text
 
 
 def test_debt_summary_empty_debt_list() -> None:
@@ -157,20 +166,34 @@ def test_timeline_one_page() -> None:
     text = output_text(output)
 
     assert "Payoff Timeline Page 1 of 1" in text
-    assert "2026-07-17" in text
+    assert "Jul 17, 2026" in text
     assert "$50.00" in text
 
 
 def test_timeline_multiple_pages_next_previous_and_return() -> None:
     """A long timeline can navigate forward, back, and return."""
     periods = [period(index) for index in range(25)]
-    output = run_viewer(["3", "1", "2", "3", "5"], generated_stub(periods=periods))
+    output = run_viewer(["3", "1", "1", "2", "5"], generated_stub(periods=periods))
     text = output_text(output)
 
     assert "Payoff Timeline Page 1 of 2" in text
     assert "Payoff Timeline Page 2 of 2" in text
     assert "Next Page" in text
     assert "Previous Page" in text
+
+
+def test_timeline_hides_unavailable_page_directions() -> None:
+    """Timeline navigation only shows page actions that can move."""
+    periods = [period(index) for index in range(25)]
+    output = run_viewer(["3", "1", "3"], generated_stub(periods=periods))
+    text = output_text(output)
+    first_page = text.split("Payoff Timeline Page 2 of 2")[0]
+    second_page = text.split("Payoff Timeline Page 2 of 2")[1]
+
+    assert "Next Page" in first_page
+    assert "Previous Page" not in first_page
+    assert "Previous Page" in second_page
+    assert "Next Page" not in second_page
 
 
 def test_timeline_empty_forecast() -> None:

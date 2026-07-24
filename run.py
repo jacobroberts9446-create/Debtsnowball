@@ -110,11 +110,21 @@ def build_main_menu_options(
     return [
         MenuOption(
             "1",
-            "Generate Budget Plan",
-            lambda: run_generate_budget_plan_action(generate_budget_plan_func),
+            "Create New Plan",
+            lambda: run_create_new_plan_action(
+                plan_setup_func,
+                results_viewer_func,
+                input_func=input_func,
+                output_func=output_func,
+            ),
         ),
         MenuOption(
             "2",
+            "Generate Plan From Config",
+            lambda: run_generate_budget_plan_action(generate_budget_plan_func),
+        ),
+        MenuOption(
+            "3",
             "Saved Plans",
             lambda: run_saved_plans_menu(
                 plan_history_service_factory=plan_history_service_factory,
@@ -125,7 +135,7 @@ def build_main_menu_options(
             ),
         ),
         MenuOption(
-            "3",
+            "4",
             "History",
             lambda: run_history_menu(
                 plan_history_service_factory=plan_history_service_factory,
@@ -135,21 +145,11 @@ def build_main_menu_options(
             ),
         ),
         MenuOption(
-            "4",
+            "5",
             "Help",
             lambda: show_menu_help(input_func=input_func, output_func=output_func),
         ),
-        MenuOption("5", "Exit", lambda: exit_menu(output_func)),
-        MenuOption(
-            "6",
-            "Create New Plan",
-            lambda: run_create_new_plan_action(
-                plan_setup_func,
-                results_viewer_func,
-                input_func=input_func,
-                output_func=output_func,
-            ),
-        ),
+        MenuOption("6", "Exit", lambda: exit_menu(output_func)),
     ]
 
 
@@ -163,11 +163,7 @@ def run_create_new_plan_action(
     result = plan_setup_func(input_func=input_func, output_func=output_func)
     if result is not None:
         results_viewer_func(result, input_func=input_func, output_func=output_func)
-        output_func("Plan setup complete.")
-        output_func(
-            "Plan generated in memory. "
-            "Save and workbook setup will continue in a later milestone."
-        )
+        output_func("Returned from plan results.")
     return False
 
 
@@ -246,7 +242,7 @@ def list_saved_plans_action(
         print_error(str(exc), output_func)
     else:
         if not plans:
-            print_warning("No saved plans found.", output_func)
+            output_func("No saved plans found.")
         else:
             print_table(
                 ["ID", "Name", "Description"],
@@ -279,7 +275,7 @@ def list_recent_plans_action(
             return False
         if not recent_plans:
             output_func("")
-            print_warning("No recent plans found.", output_func)
+            output_func("No recent plans found.")
             wait_for_enter(input_func)
             return False
 
@@ -807,8 +803,8 @@ def show_menu_help(
 ) -> bool:
     """Print brief help for the interactive menu before returning."""
     output_func("")
-    output_func("Create New Plan: starts interactive setup for a new plan.")
-    output_func("Generate Budget Plan: creates the budget plan and Excel workbook.")
+    output_func("Create New Plan: starts the guided interactive setup workflow.")
+    output_func("Generate Plan From Config: creates the workbook from config.json.")
     output_func("Saved Plans: lists saved plans or saves the current plan.")
     output_func("History: views, compares, or restores saved plan versions.")
     output_func("Help: explains the menu options.")

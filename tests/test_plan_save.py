@@ -199,7 +199,9 @@ def test_save_new_plan() -> None:
     assert state.version_number == 1
     assert service.created[0].name == "Plan"
     assert service.forecasts[0][0] == state.version_id
-    assert "✓ Plan saved successfully." in output
+    assert "Plan saved successfully." in output
+    assert "✓" not in "\n".join(output)
+    assert "â" not in "\n".join(output)
     assert "Version:" in output
     assert "1" in output
 
@@ -214,7 +216,7 @@ def test_overwrite_existing_plan_saves_new_version() -> None:
     assert service.created == []
     assert service.saved_versions[0][0] == 7
     assert service.forecasts
-    assert "✓ Plan saved successfully." in output
+    assert "Plan saved successfully." in output
 
 
 def test_existing_plan_duplicate_version_does_not_save_forecast_again() -> None:
@@ -236,7 +238,7 @@ def test_existing_plan_duplicate_version_does_not_save_forecast_again() -> None:
     assert state.version_id == 70
     assert service.saved_versions
     assert service.forecasts == []
-    assert "✓ Plan saved successfully." in output
+    assert "Plan saved successfully." in output
 
 
 def test_declining_existing_plan_cancels_without_save() -> None:
@@ -269,7 +271,7 @@ def test_saved_plan_can_save_new_version() -> None:
     assert state.version_number == 2
     assert service.saved_versions[0][0] == 7
     assert len(service.forecasts) == 1
-    assert "✓ Plan saved successfully." in output
+    assert "Plan saved successfully." in output
 
 
 def test_duplicate_save_prevention_does_not_save_forecast_again() -> None:
@@ -293,7 +295,7 @@ def test_duplicate_save_prevention_does_not_save_forecast_again() -> None:
     assert state.version_id == 70
     assert service.saved_versions
     assert service.forecasts == []
-    assert "✓ Plan saved successfully." in output
+    assert "Plan saved successfully." in output
 
 
 def test_saved_plan_can_save_as_new_plan() -> None:
@@ -339,7 +341,7 @@ def test_retry_after_failure_can_succeed() -> None:
 
     assert state.saved
     assert service.created
-    assert "✓ Plan saved successfully." in output
+    assert "Plan saved successfully." in output
 
 
 def test_no_regeneration_or_workbook_generation(monkeypatch) -> None:
@@ -638,3 +640,5 @@ def test_atomic_save_does_not_rerun_forecast_or_workbook(tmp_path, monkeypatch) 
     )
 
     assert calls == []
+
+

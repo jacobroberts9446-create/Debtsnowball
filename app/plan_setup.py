@@ -364,7 +364,7 @@ def pay_frequency_label(pay_frequency: PayFrequency) -> str:
 
 def format_setup_date(value: date) -> str:
     """Format setup dates consistently for console output."""
-    return value.strftime("%m/%d/%Y")
+    return value.strftime("%b %d, %Y")
 
 
 def raise_if_cancelled(value: str) -> None:

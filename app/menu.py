@@ -64,7 +64,7 @@ def display_menu(
 
 def wait_for_enter(
     input_func: InputFunc = input,
-    prompt: str = "Press Enter to return to the main menu...",
+    prompt: str = "Press Enter to continue...",
 ) -> None:
     """Wait for the user to press Enter."""
     input_func(prompt)

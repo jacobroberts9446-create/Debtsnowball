@@ -12,6 +12,7 @@ from app.console import (
     print_success,
     print_table,
     print_warning,
+    format_percentage,
 )
 from app.debt_input import collect_debts, parse_nonnegative_money, total_debt_balance
 from app.menu import InputFunc, MenuOption, display_menu
@@ -439,7 +440,7 @@ def print_full_review(setup: BudgetSetupResult, output_func: OutputFunc = print)
         [
             ["PLAN", "Plan Name", setup.plan_name],
             ["PLAN", "Pay Frequency", pay_frequency_label(setup.pay_frequency)],
-            ["PLAN", "First Paycheck Date", setup.first_paycheck_date.strftime("%m/%d/%Y")],
+            ["PLAN", "First Paycheck Date", setup.first_paycheck_date.strftime("%b %d, %Y")],
             ["PLAN", "Net Paycheck Amount", format_currency(setup.net_paycheck_amount)],
             ["DEBTS", "Number of Debts", str(len(setup.debts))],
             ["DEBTS", "Total Debt Balance", format_currency(total_debt_balance(setup.debts))],
@@ -465,12 +466,12 @@ def print_full_review(setup: BudgetSetupResult, output_func: OutputFunc = print)
             [
                 "BUDGET",
                 "Savings %",
-                percent_value(setup.savings_strategy.savings_percent),
+                format_percentage(setup.savings_strategy.savings_percent),
             ],
             [
                 "BUDGET",
                 "Snowball %",
-                percent_value(setup.savings_strategy.snowball_percent),
+                format_percentage(setup.savings_strategy.snowball_percent),
             ],
         ],
         output_func,
@@ -521,11 +522,3 @@ def replace_budget_setup(setup: BudgetSetupResult, **changes) -> BudgetSetupResu
     }
     values.update(changes)
     return BudgetSetupResult(**values)
-
-
-def percent_value(value: Decimal | None) -> str:
-    """Return a display percentage or Not available."""
-    if value is None:
-        return "Not available."
-    text = f"{value:f}".rstrip("0").rstrip(".")
-    return f"{text}%"

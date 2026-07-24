@@ -268,6 +268,8 @@ def view_payoff_timeline(
             len(periods) > TIMELINE_PAGE_SIZE,
             input_func,
             output_func,
+            page=page,
+            last_page=max_page(periods),
         )
         if action == "summary":
             return False
@@ -316,16 +318,27 @@ def timeline_navigation(
     paginated: bool,
     input_func: InputFunc,
     output_func: OutputFunc,
+    *,
+    page: int = 0,
+    last_page: int = 0,
 ) -> str | bool:
     """Navigate timeline pages or return out of the viewer."""
     options = []
     if paginated:
+        next_key = None
+        previous_key = None
+        if page < last_page:
+            next_key = str(len(options) + 1)
+            options.append(MenuOption(next_key, "Next Page", lambda: True))
+        if page > 0:
+            previous_key = str(len(options) + 1)
+            options.append(MenuOption(previous_key, "Previous Page", lambda: True))
+        summary_key = str(len(options) + 1)
+        main_key = str(len(options) + 2)
         options.extend(
             [
-                MenuOption("1", "Next Page", lambda: True),
-                MenuOption("2", "Previous Page", lambda: True),
-                MenuOption("3", "Return to Results Summary", lambda: True),
-                MenuOption("4", "Return to Main Menu", lambda: True),
+                MenuOption(summary_key, "Return to Results Summary", lambda: True),
+                MenuOption(main_key, "Return to Main Menu", lambda: True),
             ]
         )
     else:
@@ -339,15 +352,16 @@ def timeline_navigation(
         display_menu("Timeline Navigation", options, output_func)
         choice = input_func("Choose an option: ").strip()
         if paginated:
-            if choice == "1":
+            if choice == next_key:
                 return "next"
-            if choice == "2":
+            if choice == previous_key:
                 return "previous"
-            if choice == "3":
+            if choice == summary_key:
                 return "summary"
-            if choice == "4":
+            if choice == main_key:
                 return "main"
-            print_warning("Please choose one of: 1, 2, 3, 4.", output_func)
+            allowed = ", ".join(option.key for option in options)
+            print_warning(f"Please choose one of: {allowed}.", output_func)
         else:
             if choice == "1":
                 return "summary"
@@ -389,16 +403,18 @@ def money_value(value) -> str:
 
 
 def date_value(value) -> str:
-    """Return an ISO date or Not available."""
+    """Return a user-facing date or Not available."""
     if value is None:
         return "Not available."
-    return value.isoformat()
+    return value.strftime("%b %d, %Y")
 
 
 def duration_value(value) -> str:
     """Return a duration string or Not available."""
     if value is None:
         return "Not available."
+    if value == 0:
+        return "Paid off on the first paycheck"
     return f"{value} days"
 
 

@@ -200,7 +200,7 @@ def print_save_success(
 ) -> None:
     """Print the save success screen."""
     output_func("")
-    output_func("✓ Plan saved successfully.")
+    output_func("Plan saved successfully.")
     output_func("")
     output_func("Plan:")
     output_func(result.plan.name)

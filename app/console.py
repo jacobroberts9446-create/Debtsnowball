@@ -3,6 +3,7 @@
 import os
 import sys
 from collections.abc import Callable, Mapping
+from decimal import Decimal
 from typing import TextIO
 
 BANNER_WIDTH = 60
@@ -153,3 +154,16 @@ def print_table(
         output_func(
             " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
         )
+
+
+def format_percentage(value: Decimal | int | str | None) -> str:
+    """Format ratios or whole percentages without unnecessary trailing zeros."""
+    if value is None:
+        return "Not available."
+    percent = Decimal(str(value))
+    if Decimal("-1") <= percent <= Decimal("1"):
+        percent *= Decimal("100")
+    text = f"{percent.normalize():f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return f"{text}%"

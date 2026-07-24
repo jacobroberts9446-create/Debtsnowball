@@ -361,6 +361,82 @@ def test_final_review_displays_custom_savings_strategy() -> None:
     assert "75%" in text
 
 
+def test_final_review_displays_default_split_as_fifty_fifty() -> None:
+    """The default split strategy displays 50% / 50%, not trimmed 5% values."""
+    result, _prompts, output, _calls = run_budget_setup(
+        ["Plan", "1", "07/17/2026", "2000", "1", "1", "1", "0", "1", "0", "0", "1"],
+    )
+
+    assert result is not None
+    text = "\n".join(output)
+    assert "Savings %" in text
+    assert "50%" in text
+    assert "Snowball %" in text
+
+
+def test_final_review_displays_predefined_savings_strategy_percentages() -> None:
+    """Predefined savings strategies show their user-facing percentages."""
+    cases = [
+        (
+            SavingsStrategySelection(
+                SavingsStrategy.EMERGENCY_FIRST,
+                Decimal("100"),
+                Decimal("0"),
+            ),
+            ("100%", "0%"),
+        ),
+        (
+            SavingsStrategySelection(
+                SavingsStrategy.SNOWBALL,
+                Decimal("0"),
+                Decimal("100"),
+            ),
+            ("0%", "100%"),
+        ),
+    ]
+
+    for strategy, expected_values in cases:
+        result, _prompts, output, _calls = run_budget_setup(
+            [
+                "Plan",
+                "1",
+                "07/17/2026",
+                "2000",
+                "1",
+                "1",
+                "1",
+                "0",
+                "1",
+                "0",
+                "0",
+                "1",
+            ],
+            savings_strategy=strategy,
+        )
+
+        assert result is not None
+        text = "\n".join(output)
+        for value in expected_values:
+            assert value in text
+
+
+def test_final_review_displays_fractional_custom_savings_percentages() -> None:
+    """Custom fractional percentages keep meaningful decimal places."""
+    result, _prompts, output, _calls = run_budget_setup(
+        ["Plan", "1", "07/17/2026", "2000", "1", "1", "1", "0", "1", "0", "0", "1"],
+        savings_strategy=SavingsStrategySelection(
+            SavingsStrategy.CUSTOM,
+            Decimal("32.5"),
+            Decimal("67.5"),
+        ),
+    )
+
+    assert result is not None
+    text = "\n".join(output)
+    assert "32.5%" in text
+    assert "67.5%" in text
+
+
 def test_generation_validation_failure_returns_to_review_and_can_retry() -> None:
     """Generation failures preserve setup values and allow edit/retry."""
     attempts = []
