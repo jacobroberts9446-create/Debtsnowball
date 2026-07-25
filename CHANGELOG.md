@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
 - Safe interactive reversal of recorded activity with immutable audit history
 - Atomic activity correction with linked reversal and replacement entries
 
+### Fixed
+- Debt balance observations now compare with the matching active-forecast debt
+  and remain separate when multiple debts are observed in one pay period.
+
 ## [1.1.0] - Unreleased
 
 ### Added

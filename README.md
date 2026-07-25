@@ -574,7 +574,10 @@ spending, and signed adjustments without requiring database IDs.
 
 Use `Record Balance` under `Track Progress` to record a current debt balance by
 debt name or the plan's current savings balance. Balance observations are kept
-separate from payments and deposits.
+separate from payments and deposits. Debt observations are compared
+independently with the same named debt in the active forecast. The latest
+observation for each debt is shown; renamed or removed debts remain visible as
+unmatched rather than being folded into the plan's total debt.
 
 Use `Review Recorded Activity` to inspect, correct, or reverse a recent
 transaction. Correction requires typing `CORRECT` and atomically adds both an

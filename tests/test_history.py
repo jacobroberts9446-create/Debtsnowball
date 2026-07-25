@@ -29,7 +29,7 @@ from app.models import (
     AllocationReasonCode,
     DataWarningSeverity,
 )
-from app.money import money
+from app.money import from_cents, money
 
 
 def short_plan(config):
@@ -983,6 +983,13 @@ def test_export_import_json_and_csv_preserve_money_strings_and_duplicate_protect
         ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
         Decimal("1715.00"),
     )
+    service.add_balance_observation(
+        plan.id,
+        date(2026, 7, 18),
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        Decimal("1000.00"),
+        debt_identifier=config.debts[0].name,
+    )
 
     json_path = service.export_plan_json(plan.id, tmp_path / "plan.json")
     csv_path = service.export_forecast_periods_csv(snapshot.id, tmp_path / "periods.csv")
@@ -990,9 +997,16 @@ def test_export_import_json_and_csv_preserve_money_strings_and_duplicate_protect
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     with csv_path.open(encoding="utf-8") as csv_file:
         csv_rows = list(csv.DictReader(csv_file))
+    with csv_bundle["forecast_vs_actual"].open(encoding="utf-8") as csv_file:
+        comparison_rows = list(csv.DictReader(csv_file))
 
     assert payload["versions"][0]["config_snapshot"].count("2400.00") > 0
     assert csv_rows[0]["savings"] == "215.00"
+    exported_comparisons = json.loads(
+        comparison_rows[0]["debt_balance_comparisons"]
+    )
+    assert exported_comparisons[0]["debt_name"] == config.debts[0].name
+    assert exported_comparisons[0]["observed_balance"] == "1000.00"
     assert set(csv_bundle) == {
         "plan_versions",
         "forecast_periods",
@@ -1054,6 +1068,13 @@ def test_optional_history_excel_report_uses_requested_history_sheets(tmp_path):
         ActualEntryType.INCOME_RECEIVED,
         Decimal("2234.00"),
     )
+    service.add_balance_observation(
+        plan.id,
+        date(2026, 7, 17),
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        Decimal("1000.00"),
+        debt_identifier=config.debts[0].name,
+    )
     actual = service.compare_forecast_to_actual(plan.id)
 
     details = service.history_report_rows(plan.id)
@@ -1084,6 +1105,14 @@ def test_optional_history_excel_report_uses_requested_history_sheets(tmp_path):
     assert workbook["Debt History"]["A1"].value == "id"
     assert workbook["Savings History"]["A1"].value == "id"
     assert isinstance(workbook["Forecast vs Actual"]["B3"].value, int | float)
+    period_sheet = workbook["Period Details"]
+    period_headers = [cell.value for cell in period_sheet[1]]
+    debt_comparisons_column = period_headers.index("debt_balance_comparisons") + 1
+    exported_comparisons = json.loads(
+        period_sheet.cell(row=2, column=debt_comparisons_column).value
+    )
+    assert exported_comparisons[0]["debt_name"] == config.debts[0].name
+    assert exported_comparisons[0]["observed_balance"] == "1000.00"
     workbook.close()
 
 
@@ -1107,11 +1136,25 @@ def test_actual_entries_and_observations_match_forecast_period_windows(tmp_path)
         ActualEntryType.BILL_PAID,
         Decimal("100.00"),
     )
+    first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
+    debt_name = config.debts[0].name
+    with closing(sqlite3.connect(tmp_path / "history.sqlite")) as conn:
+        planned_debt = from_cents(
+            conn.execute(
+                """
+                SELECT ending_balance
+                FROM debt_snapshots
+                WHERE forecast_period_id = ? AND debt_name = ?
+                """,
+                (first_period.forecast_period_id, debt_name),
+            ).fetchone()[0]
+        )
     observation = service.add_balance_observation(
         plan.id,
         date(2026, 7, 20),
         ActualEntryType.DEBT_BALANCE_OBSERVATION,
-        forecast.periods[0].total_debt_balance - Decimal("5.00"),
+        planned_debt - Decimal("5.00"),
+        debt_identifier=debt_name,
     )
     unmatched = service.add_actual_entry(
         plan.id,
@@ -1137,6 +1180,188 @@ def test_actual_entries_and_observations_match_forecast_period_windows(tmp_path)
     assert unmatched.id == rows[1][0]
     assert rows[1][1] is None
     assert comparisons[0].debt_balance_variance == Decimal("-5.00")
+    assert comparisons[0].debt_balance_comparisons[0].debt_name == debt_name
+    assert comparisons[0].debt_balance_comparisons[0].planned_balance == planned_debt
+
+
+def test_debt_balance_observations_compare_independently_and_latest_wins(tmp_path):
+    service = PlanHistoryService(tmp_path / "debt-balances.sqlite")
+    _, plan = history_plan_with_forecast(service, "Debt Balances")
+    first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
+    with closing(sqlite3.connect(tmp_path / "debt-balances.sqlite")) as conn:
+        debt_rows = conn.execute(
+            """
+            SELECT debt_name, ending_balance
+            FROM debt_snapshots
+            WHERE forecast_period_id = ?
+            ORDER BY payoff_order, id
+            LIMIT 2
+            """,
+            (first_period.forecast_period_id,),
+        ).fetchall()
+        planned_savings = from_cents(
+            conn.execute(
+                """
+                SELECT ending_savings
+                FROM savings_snapshots
+                WHERE forecast_period_id = ?
+                """,
+                (first_period.forecast_period_id,),
+            ).fetchone()[0]
+        )
+    (first_name, first_cents), (second_name, second_cents) = debt_rows
+    first_planned = from_cents(first_cents)
+    second_planned = from_cents(second_cents)
+
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        first_planned - Decimal("45.00"),
+        debt_identifier=first_name,
+    )
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        second_planned + Decimal("80.00"),
+        debt_identifier=second_name,
+    )
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        first_planned - Decimal("30.00"),
+        debt_identifier=first_name,
+    )
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+        planned_savings + Decimal("25.00"),
+    )
+
+    comparison = service.compare_forecast_to_actual_periods(plan.id)[0]
+    by_name = {
+        item.debt_name: item for item in comparison.debt_balance_comparisons
+    }
+    aggregate_by_name = {
+        item.debt_name: item
+        for item in service.compare_forecast_to_actual(plan.id).debt_balance_comparisons
+    }
+
+    assert set(by_name) == {first_name, second_name}
+    assert by_name[first_name].observed_balance == first_planned - Decimal("30.00")
+    assert by_name[first_name].variance == Decimal("-30.00")
+    assert by_name[first_name].status == "Matched"
+    assert by_name[second_name].observed_balance == second_planned + Decimal("80.00")
+    assert by_name[second_name].variance == Decimal("80.00")
+    assert by_name[second_name].status == "Matched"
+    assert comparison.debt_balance_variance is None
+    assert comparison.savings_balance_variance == Decimal("25.00")
+    assert aggregate_by_name == by_name
+
+
+@pytest.mark.parametrize("change", ["renamed", "removed"])
+def test_debt_balance_observation_remains_visible_when_debt_no_longer_matches(
+    tmp_path,
+    change,
+):
+    service = PlanHistoryService(tmp_path / f"{change}-debt.sqlite")
+    config, plan = history_plan_with_forecast(service, f"{change.title()} Debt")
+    first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
+    original_name = config.debts[0].name
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        Decimal("321.09"),
+        debt_identifier=original_name,
+    )
+
+    changed = deepcopy(config)
+    if change == "renamed":
+        changed.debts[0].name = f"{original_name} Renamed"
+    else:
+        changed.debts.pop(0)
+    summaries, forecast = short_plan(changed)
+    version = service.save_plan_version(plan.id, changed)
+    service.generate_and_save_forecast(
+        version.id,
+        forecast,
+        starting_savings=changed.settings.starting_savings,
+        pay_period_summaries=summaries,
+        starting_debts=changed.debts,
+    )
+
+    result = service.compare_forecast_to_actual(plan.id).debt_balance_comparisons
+
+    assert len(result) == 1
+    assert result[0].debt_name == original_name
+    assert result[0].observed_balance == Decimal("321.09")
+    assert result[0].planned_balance is None
+    assert result[0].variance is None
+    assert result[0].status == "No matching debt in active forecast"
+
+
+def test_debt_balance_observation_does_not_guess_case_or_whitespace(tmp_path):
+    service = PlanHistoryService(tmp_path / "exact-debt-name.sqlite")
+    config, plan = history_plan_with_forecast(service, "Exact Debt Name")
+    first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
+    entered_name = f" {config.debts[0].name.lower()} "
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        Decimal("500.00"),
+        debt_identifier=entered_name,
+    )
+
+    result = service.compare_forecast_to_actual(plan.id).debt_balance_comparisons
+
+    assert result[0].debt_name == entered_name
+    assert result[0].planned_balance is None
+    assert result[0].status == "No matching debt in active forecast"
+
+
+def test_duplicate_forecast_debt_names_are_reported_as_ambiguous(tmp_path):
+    database_path = tmp_path / "ambiguous-debt.sqlite"
+    service = PlanHistoryService(database_path)
+    _, plan = history_plan_with_forecast(service, "Ambiguous Debt")
+    first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
+    with closing(sqlite3.connect(database_path)) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, debt_name
+            FROM debt_snapshots
+            WHERE forecast_period_id = ?
+            ORDER BY payoff_order, id
+            LIMIT 2
+            """,
+            (first_period.forecast_period_id,),
+        ).fetchall()
+        duplicate_name = rows[0][1]
+        with conn:
+            conn.execute(
+                "UPDATE debt_snapshots SET debt_name = ? WHERE id = ?",
+                (duplicate_name, rows[1][0]),
+            )
+    service.add_balance_observation(
+        plan.id,
+        first_period.pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        Decimal("777.77"),
+        debt_identifier=duplicate_name,
+    )
+
+    result = service.compare_forecast_to_actual(plan.id).debt_balance_comparisons
+
+    assert len(result) == 1
+    assert result[0].debt_name == duplicate_name
+    assert result[0].observed_balance == Decimal("777.77")
+    assert result[0].planned_balance is None
+    assert result[0].variance is None
+    assert result[0].status == "Ambiguous debt name in active forecast"
 
 
 def test_progress_is_rematched_to_new_version_periods_without_mutating_history(tmp_path):
@@ -1171,11 +1396,25 @@ def test_progress_is_rematched_to_new_version_periods_without_mutating_history(t
         ActualEntryType.BILL_PAID,
         Decimal("15.00"),
     )
+    debt_name = config.debts[0].name
+    original_period = service.compare_forecast_to_actual_periods(plan.id)[1]
+    with closing(sqlite3.connect(tmp_path / "version-progress.sqlite")) as conn:
+        original_planned_debt = from_cents(
+            conn.execute(
+                """
+                SELECT ending_balance
+                FROM debt_snapshots
+                WHERE forecast_period_id = ? AND debt_name = ?
+                """,
+                (original_period.forecast_period_id, debt_name),
+            ).fetchone()[0]
+        )
     observation = service.add_balance_observation(
         plan.id,
         activity_date,
         ActualEntryType.DEBT_BALANCE_OBSERVATION,
-        forecast.periods[1].total_debt_balance,
+        original_planned_debt,
+        debt_identifier=debt_name,
     )
     original_period_id = observation.forecast_period_id
 
@@ -1212,14 +1451,25 @@ def test_progress_is_rematched_to_new_version_periods_without_mutating_history(t
             (observation.id,),
         ).fetchone()
         foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+        current_planned_debt = from_cents(
+            conn.execute(
+                """
+                SELECT ending_balance
+                FROM debt_snapshots
+                WHERE forecast_period_id = ? AND debt_name = ?
+                """,
+                (first.forecast_period_id, debt_name),
+            ).fetchone()[0]
+        )
 
     assert first.pay_date == date(2026, 7, 31)
     assert first.actual_income == Decimal("100.00")
     assert first.actual_bills == Decimal("40.00")
     assert first.debt_balance_variance == money(
-        forecast.periods[1].total_debt_balance
-        - changed_forecast.periods[0].total_debt_balance
+        original_planned_debt - current_planned_debt
     )
+    assert first.debt_balance_comparisons[0].debt_name == debt_name
+    assert first.debt_balance_comparisons[0].status == "Matched"
     assert len(service.list_actual_entries(plan.id)) == 3
     assert len(service.list_balance_observations(plan.id)) == 1
     assert {row[0] for row in actual_rows} == {original_period_id}
@@ -1229,7 +1479,8 @@ def test_progress_is_rematched_to_new_version_periods_without_mutating_history(t
 
 
 def test_progress_survives_multiple_versions_and_restored_version(tmp_path):
-    service = PlanHistoryService(tmp_path / "restore-progress.sqlite")
+    database_path = tmp_path / "restore-progress.sqlite"
+    service = PlanHistoryService(database_path)
     config = Config().load("config.json")
     summaries, forecast = short_plan(config)
     plan = service.create_plan("Restore Progress", config)
@@ -1248,6 +1499,26 @@ def test_progress_survives_multiple_versions_and_restored_version(tmp_path):
         ActualEntryType.DEBT_PAYMENT,
         Decimal("75.00"),
     )
+    first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
+    debt_name = config.debts[0].name
+    with closing(sqlite3.connect(database_path)) as conn:
+        planned_debt = from_cents(
+            conn.execute(
+                """
+                SELECT ending_balance
+                FROM debt_snapshots
+                WHERE forecast_period_id = ? AND debt_name = ?
+                """,
+                (first_period.forecast_period_id, debt_name),
+            ).fetchone()[0]
+        )
+    service.add_balance_observation(
+        plan.id,
+        pay_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        planned_debt - Decimal("12.34"),
+        debt_identifier=debt_name,
+    )
 
     version_two = service.save_plan_version(plan.id, config, force=True)
     service.generate_and_save_forecast(
@@ -1257,16 +1528,24 @@ def test_progress_survives_multiple_versions_and_restored_version(tmp_path):
         pay_period_summaries=summaries,
         starting_debts=config.debts,
     )
-    assert service.compare_forecast_to_actual_periods(plan.id)[
-        0
-    ].actual_debt_payments == Decimal("75.00")
+    version_two_comparison = service.compare_forecast_to_actual_periods(plan.id)[0]
+    assert version_two_comparison.actual_debt_payments == Decimal("75.00")
+    assert version_two_comparison.debt_balance_comparisons[0].debt_name == debt_name
+    assert version_two_comparison.debt_balance_comparisons[0].variance == Decimal(
+        "-12.34"
+    )
 
     restored = service.restore_plan_version(version_one.id)
     restored_comparison = service.compare_forecast_to_actual_periods(plan.id)
 
     assert restored.version_number == 3
     assert restored_comparison[0].actual_debt_payments == Decimal("75.00")
+    assert restored_comparison[0].debt_balance_comparisons[0].debt_name == debt_name
+    assert restored_comparison[0].debt_balance_comparisons[0].variance == Decimal(
+        "-12.34"
+    )
     assert len(service.list_actual_entries(plan.id)) == 1
+    assert len(service.list_balance_observations(plan.id)) == 1
     with pytest.raises(ValueError, match="does not have a saved forecast"):
         service._latest_snapshot_for_version(restored.id)
 

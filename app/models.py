@@ -678,6 +678,18 @@ class ActualDataCompleteness:
 
 
 @dataclass(frozen=True)
+class DebtBalanceComparison:
+    """One observed debt balance compared with its active forecast debt."""
+
+    debt_name: str
+    observed_balance: Decimal
+    observation_date: date
+    planned_balance: Decimal | None = None
+    variance: Decimal | None = None
+    status: str = "No matching debt in active forecast"
+
+
+@dataclass(frozen=True)
 class ForecastActualComparison:
     """Planned-versus-actual totals for a plan period."""
 
@@ -697,6 +709,7 @@ class ForecastActualComparison:
     completeness: ActualDataCompleteness = field(
         default_factory=ActualDataCompleteness
     )
+    debt_balance_comparisons: tuple[DebtBalanceComparison, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -729,6 +742,7 @@ class ForecastActualPeriodComparison:
     data_completeness: str
     status: str
     interpretation: str
+    debt_balance_comparisons: tuple[DebtBalanceComparison, ...] = ()
 
 
 @dataclass(frozen=True)

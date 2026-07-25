@@ -30,6 +30,7 @@ from app.models import (
     ScenarioResult,
 )
 from app.paths import default_workbook_path
+from app.serialization import dumps_json
 
 
 class ExcelWriter:
@@ -112,7 +113,7 @@ class ExcelWriter:
         if actual_periods is not None:
             self._write_history_dict_sheet(
                 workbook.create_sheet("Period Details"),
-                [asdict(row) for row in actual_periods],
+                [self._history_period_row(row) for row in actual_periods],
             )
         if debt_history is not None:
             self._write_history_dict_sheet(
@@ -299,6 +300,18 @@ class ExcelWriter:
             currency_columns=currency_columns,
             date_columns=date_columns,
         )
+
+    @staticmethod
+    def _history_period_row(
+        row: ForecastActualPeriodComparison,
+    ) -> dict[str, object]:
+        """Flatten nested debt comparisons for an Excel history row."""
+        output = asdict(row)
+        output["debt_balance_comparisons"] = dumps_json(
+            output["debt_balance_comparisons"],
+            sort_keys=True,
+        )
+        return output
 
     def _write_pay_period_summaries(
         self,

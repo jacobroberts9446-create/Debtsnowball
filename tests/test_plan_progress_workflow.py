@@ -11,6 +11,7 @@ import pytest
 from app.models import (
     ActualDataCompleteness,
     ActualEntryType,
+    DebtBalanceComparison,
     ForecastActualComparison,
 )
 from app.workflows import plan_progress
@@ -422,6 +423,70 @@ def test_forecast_vs_actual_displays_existing_comparison_values() -> None:
     assert "$200.00" in text
     assert "$100.00" in text
     assert "732" not in text
+
+
+def test_progress_views_display_debt_specific_balance_comparisons() -> None:
+    """Debt observations remain separate and expose no internal identifiers."""
+    service = FakeProgressService()
+    service.comparison = replace(
+        comparison(),
+        debt_balance_comparisons=(
+            DebtBalanceComparison(
+                debt_name="Card A",
+                planned_balance=Decimal("900.00"),
+                observed_balance=Decimal("855.00"),
+                variance=Decimal("-45.00"),
+                observation_date=date(2026, 7, 20),
+                status="Matched",
+            ),
+            DebtBalanceComparison(
+                debt_name="Card B",
+                planned_balance=Decimal("1800.00"),
+                observed_balance=Decimal("1880.00"),
+                variance=Decimal("80.00"),
+                observation_date=date(2026, 7, 20),
+                status="Matched",
+            ),
+            DebtBalanceComparison(
+                debt_name="Old Card",
+                observed_balance=Decimal("100.00"),
+                observation_date=date(2026, 7, 20),
+                status="No matching debt in active forecast",
+            ),
+        ),
+    )
+    summary_output = []
+    comparison_output = []
+
+    plan_progress.show_progress_summary(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=summary_output.append,
+    )
+    plan_progress.show_forecast_vs_actual(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=comparison_output.append,
+    )
+
+    for output in (summary_output, comparison_output):
+        text = output_text(output)
+        assert "Debt Balances" in text
+        assert "Debt" in text
+        assert "Planned" in text
+        assert "Observed" in text
+        assert "Variance" in text
+        assert "Card A" in text
+        assert "-$45.00" in text
+        assert "Card B" in text
+        assert "+$80.00" in text
+        assert "Old Card" in text
+        assert "Not available" in text
+        assert "No matching debt in active forecast" in text
+        assert "732" not in text
+        assert "DEBT_BALANCE_OBSERVATION" not in text
 
 
 def test_forecast_vs_actual_displays_net_savings_and_adjusted_remaining_cash() -> None:

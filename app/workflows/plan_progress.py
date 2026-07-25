@@ -21,7 +21,7 @@ from app.menu import (
     run_menu,
     wait_for_enter,
 )
-from app.models import ActualDataCompleteness, ActualEntryType
+from app.models import ActualDataCompleteness, ActualEntryType, DebtBalanceComparison
 from app.money import format_currency, money
 from app.plan_setup import parse_first_paycheck_date
 from app.workflows.plan_presenter import display_plan_name, format_saved_datetime
@@ -698,6 +698,10 @@ def show_progress_summary(
             output_func,
         )
         if comparison is not None:
+            _show_debt_balance_comparisons(
+                comparison.debt_balance_comparisons,
+                output_func,
+            )
             _show_completeness_details(comparison.completeness, output_func)
     wait_for_enter(input_func)
     return False
@@ -769,6 +773,10 @@ def show_forecast_vs_actual(
                     format_currency(comparison.actual_remaining_cash),
                 ],
             ],
+            output_func,
+        )
+        _show_debt_balance_comparisons(
+            comparison.debt_balance_comparisons,
             output_func,
         )
     wait_for_enter(input_func)
@@ -1369,3 +1377,46 @@ def _show_completeness_details(
     output_func("Still needed:")
     for category in completeness.missing_categories:
         output_func(f"- {COMPLETENESS_LABELS[category]}")
+
+
+def _show_debt_balance_comparisons(
+    comparisons: tuple[DebtBalanceComparison, ...],
+    output_func: OutputFunc,
+) -> None:
+    """Display independent debt balance observations without internal IDs."""
+    if not comparisons:
+        return
+    output_func("")
+    print_section_header("Debt Balances", output_func)
+    rows = []
+    for comparison in comparisons:
+        rows.append(
+            [
+                comparison.debt_name,
+                _format_optional_currency(comparison.planned_balance),
+                format_currency(comparison.observed_balance),
+                _format_variance(comparison.variance),
+                comparison.status,
+            ]
+        )
+    print_table(
+        ["Debt", "Planned", "Observed", "Variance", "Status"],
+        rows,
+        output_func,
+    )
+
+
+def _format_optional_currency(value: Decimal | None) -> str:
+    """Format optional money for comparison output."""
+    return "Not available" if value is None else format_currency(value)
+
+
+def _format_variance(value: Decimal | None) -> str:
+    """Format an optional signed currency variance."""
+    if value is None:
+        return "Not available"
+    if value > Decimal("0.00"):
+        return f"+{format_currency(value)}"
+    if value < Decimal("0.00"):
+        return f"-{format_currency(abs(value))}"
+    return format_currency(value)

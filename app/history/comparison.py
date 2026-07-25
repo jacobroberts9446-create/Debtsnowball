@@ -14,6 +14,8 @@ from app.models import (
     ActualDataCompleteness,
     ActualEntryType,
     AssumptionDifference,
+    BalanceObservation,
+    DebtBalanceComparison,
     ForecastActualComparison,
     ForecastActualPeriodComparison,
     ForecastSnapshotRecord,
@@ -50,6 +52,7 @@ class HistoryComparisonService:
             planned,
             {entry.entry_type for entry in entries},
         )
+        debt_balances = self.latest_debt_balance_comparisons(plan_id)
         actual_remaining = money(
             actual["income"]
             - actual["bills"]
@@ -82,6 +85,7 @@ class HistoryComparisonService:
             actual_remaining_cash=actual_remaining,
             status=status,
             completeness=completeness,
+            debt_balance_comparisons=debt_balances,
         )
 
     def compare_forecast_to_actual_periods(
@@ -101,6 +105,7 @@ class HistoryComparisonService:
             period_id = row[0]
             actual = actual_by_period.get(period_id, {})
             observations = observations_by_period.get(period_id, {})
+            debt_balances = observations.get("debt_balances", ())
             planned_income = from_cents(row[3])
             planned_bills = from_cents(row[4])
             planned_personal = from_cents(row[6])
@@ -171,7 +176,9 @@ class HistoryComparisonService:
                     actual_personal_spending=actual_personal,
                     planned_remaining_cash=planned_remaining,
                     actual_remaining_cash=actual_remaining,
-                    debt_balance_variance=observations.get("debt"),
+                    debt_balance_variance=self.single_debt_variance(
+                        debt_balances
+                    ),
                     savings_balance_variance=observations.get("savings"),
                     data_completeness=self.data_completeness(
                         actual,
@@ -179,6 +186,7 @@ class HistoryComparisonService:
                     ),
                     status=status,
                     interpretation=self.period_interpretation(status),
+                    debt_balance_comparisons=debt_balances,
                 )
             )
         return comparisons
@@ -477,24 +485,106 @@ class HistoryComparisonService:
         self,
         plan_id: int,
         periods: list[tuple[Any, ...]],
-    ) -> dict[int, dict[str, Decimal]]:
+    ) -> dict[int, dict[str, Any]]:
         """Return observation variances against the selected forecast periods."""
-        observations: dict[int, dict[str, Decimal]] = {}
+        debt_observations: dict[int, dict[str, BalanceObservation]] = {}
+        savings_observations: dict[int, BalanceObservation] = {}
+        for observation in self.repository.list_balance_observations(plan_id):
+            period_id = self.period_id_for_date(periods, observation.observation_date)
+            if period_id is None:
+                continue
+            if (
+                observation.observation_type
+                == ActualEntryType.DEBT_BALANCE_OBSERVATION
+            ):
+                debt_name = observation.debt_identifier or "Unnamed debt"
+                debt_observations.setdefault(period_id, {})[debt_name] = observation
+            else:
+                savings_observations[period_id] = observation
+
+        observations: dict[int, dict[str, Any]] = {}
         with self.repository.connection() as conn:
-            for observation in self.repository.list_balance_observations(plan_id):
-                period_id = self.period_id_for_date(periods, observation.observation_date)
-                if period_id is None:
-                    continue
+            for period_id, period_observations in debt_observations.items():
                 bucket = observations.setdefault(period_id, {})
-                key = (
-                    "debt"
-                    if observation.observation_type
-                    == ActualEntryType.DEBT_BALANCE_OBSERVATION
-                    else "savings"
+                bucket["debt_balances"] = tuple(
+                    self.compare_debt_observation(conn, period_id, observation)
+                    for _, observation in sorted(period_observations.items())
                 )
-                planned = self.planned_balance_for_period(conn, period_id, key)
-                bucket[key] = money(observation.balance - planned)
+            for period_id, observation in savings_observations.items():
+                bucket = observations.setdefault(period_id, {})
+                planned = self.planned_balance_for_period(conn, period_id, "savings")
+                bucket["savings"] = money(observation.balance - planned)
         return observations
+
+    def latest_debt_balance_comparisons(
+        self,
+        plan_id: int,
+    ) -> tuple[DebtBalanceComparison, ...]:
+        """Return each debt's latest observation against the active forecast."""
+        plan = self.repository.get_plan(plan_id)
+        if plan.current_version_id is None:
+            return ()
+        try:
+            snapshot = self.active_plan_snapshot(plan.current_version_id)
+        except ValueError:
+            return ()
+        periods = self.repository.forecast_period_rows(snapshot.id)
+        by_period = self.balance_observations_by_period(plan_id, periods)
+        latest: dict[str, DebtBalanceComparison] = {}
+        for row in periods:
+            for comparison in by_period.get(row[0], {}).get("debt_balances", ()):
+                latest[comparison.debt_name] = comparison
+        return tuple(latest[name] for name in sorted(latest))
+
+    @staticmethod
+    def compare_debt_observation(
+        conn: sqlite3.Connection,
+        period_id: int,
+        observation: BalanceObservation,
+    ) -> DebtBalanceComparison:
+        """Compare one observed debt with an exact-name active snapshot row."""
+        debt_name = observation.debt_identifier or "Unnamed debt"
+        rows = conn.execute(
+            """
+            SELECT ending_balance
+            FROM debt_snapshots
+            WHERE forecast_period_id = ? AND debt_name = ?
+            ORDER BY id
+            """,
+            (period_id, debt_name),
+        ).fetchall()
+        if not rows:
+            return DebtBalanceComparison(
+                debt_name=debt_name,
+                observed_balance=observation.balance,
+                observation_date=observation.observation_date,
+                status="No matching debt in active forecast",
+            )
+        if len(rows) > 1:
+            return DebtBalanceComparison(
+                debt_name=debt_name,
+                observed_balance=observation.balance,
+                observation_date=observation.observation_date,
+                status="Ambiguous debt name in active forecast",
+            )
+        planned = from_cents(rows[0][0])
+        return DebtBalanceComparison(
+            debt_name=debt_name,
+            planned_balance=planned,
+            observed_balance=observation.balance,
+            variance=money(observation.balance - planned),
+            observation_date=observation.observation_date,
+            status="Matched",
+        )
+
+    @staticmethod
+    def single_debt_variance(
+        comparisons: tuple[DebtBalanceComparison, ...],
+    ) -> Decimal | None:
+        """Preserve the legacy scalar only for one unambiguous matched debt."""
+        if len(comparisons) != 1 or comparisons[0].status != "Matched":
+            return None
+        return comparisons[0].variance
 
     @staticmethod
     def period_id_for_date(

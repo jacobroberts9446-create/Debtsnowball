@@ -125,7 +125,7 @@ class PlanHistoryExporter:
             "forecast_vs_actual": self.write_csv(
                 output / "forecast_vs_actual.csv",
                 [
-                    asdict(row)
+                    self.period_comparison_row(row)
                     for row in self.service.compare_forecast_to_actual_periods(plan_id)
                 ],
             ),
@@ -140,7 +140,7 @@ class PlanHistoryExporter:
         return {
             "forecast_snapshots": self.export_forecast_snapshots(plan_id),
             "period_comparisons": [
-                asdict(row)
+                self.period_comparison_row(row)
                 for row in self.service.compare_forecast_to_actual_periods(plan_id)
             ],
             "debt_history": self.export_debt_snapshots(plan_id),
@@ -229,6 +229,16 @@ class PlanHistoryExporter:
     def without_keys(row: dict[str, Any], keys: set[str]) -> dict[str, Any]:
         """Return a row without unstable keys."""
         return {key: value for key, value in row.items() if key not in keys}
+
+    @staticmethod
+    def period_comparison_row(row: Any) -> dict[str, Any]:
+        """Flatten nested debt comparisons for tabular history exports."""
+        output = asdict(row)
+        output["debt_balance_comparisons"] = dumps_json(
+            output["debt_balance_comparisons"],
+            sort_keys=True,
+        )
+        return output
 
     @staticmethod
     def write_csv(path: Path, rows: list[dict[str, Any]]) -> Path:
