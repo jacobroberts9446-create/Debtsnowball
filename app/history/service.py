@@ -576,21 +576,82 @@ class PlanHistoryService:
                     )
         return self.get_actual_entry(int(cursor.lastrowid))
 
-    def reverse_actual_entry(self, entry_id: int, *, note: str = "Correction") -> ActualTransaction:
-        """Reverse a posted entry while preserving the audit trail."""
-        original = self.get_actual_entry(entry_id)
-        return self.add_actual_entry(
-            original.plan_id,
-            original.entry_date,
-            original.entry_type,
-            -original.amount,
-            category=original.category,
-            description=f"Reversal: {original.description}",
-            source="correction",
-            debt_identifier=original.debt_identifier,
-            corrected_entry_id=entry_id,
-            note=note,
-        )
+    def reverse_actual_entry(
+        self,
+        entry_id: int,
+        *,
+        plan_id: int | None = None,
+        note: str = "Correction",
+    ) -> ActualTransaction:
+        """Reverse one original activity once while preserving immutable history."""
+        with closing(self.database._connect()) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    """
+                    SELECT plan_id, entry_date, entry_type, debt_identifier, amount,
+                           category, description, corrected_entry_id,
+                           forecast_period_id, match_method, matched_at
+                    FROM actual_transactions
+                    WHERE id = ?
+                    """,
+                    (entry_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("recorded activity was not found.")
+
+                original_plan_id = int(row[0])
+                if plan_id is not None and original_plan_id != plan_id:
+                    raise ValueError(
+                        "recorded activity does not belong to the selected plan."
+                    )
+                if row[7] is not None:
+                    raise ValueError("a reversal entry cannot be reversed.")
+                if conn.execute(
+                    """
+                    SELECT 1
+                    FROM actual_transactions
+                    WHERE corrected_entry_id = ?
+                    LIMIT 1
+                    """,
+                    (entry_id,),
+                ).fetchone() is not None:
+                    raise ValueError("recorded activity has already been reversed.")
+
+                cursor = conn.execute(
+                    """
+                    INSERT INTO actual_transactions (
+                        plan_id, entry_date, entry_type, debt_identifier, amount,
+                        category, description, source, created_at,
+                        corrected_entry_id, note, forecast_period_id,
+                        match_method, matched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        original_plan_id,
+                        row[1],
+                        row[2],
+                        row[3],
+                        -int(row[4]),
+                        row[5],
+                        f"Reversal: {row[6]}",
+                        "correction",
+                        utc_timestamp(),
+                        entry_id,
+                        note,
+                        row[8],
+                        row[9],
+                        row[10],
+                    ),
+                )
+                reversal_id = int(cursor.lastrowid)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.get_actual_entry(reversal_id)
 
     def add_balance_observation(
         self,

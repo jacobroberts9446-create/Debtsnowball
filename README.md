@@ -576,6 +576,11 @@ Use `Record Balance` under `Track Progress` to record a current debt balance by
 debt name or the plan's current savings balance. Balance observations are kept
 separate from payments and deposits.
 
+Use `Review Recorded Activity` to inspect recent transactions and reverse an
+incorrect entry. Reversal requires typing `REVERSE` and preserves both the
+original entry and its offsetting audit entry. Balance observations cannot be
+reversed from this workflow.
+
 Optional history features include:
 
 - Named plans with immutable versions.

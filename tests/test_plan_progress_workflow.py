@@ -30,6 +30,33 @@ def comparison(status: str = "On track") -> ForecastActualComparison:
     )
 
 
+def actual_entry(
+    entry_id: int,
+    entry_date: date,
+    entry_type: ActualEntryType,
+    amount: str,
+    *,
+    category: str = "",
+    debt_identifier: str | None = None,
+    note: str = "",
+    corrected_entry_id: int | None = None,
+):
+    """Build one deterministic actual-activity test record."""
+    return SimpleNamespace(
+        id=entry_id,
+        plan_id=732,
+        entry_date=entry_date,
+        entry_type=entry_type,
+        amount=Decimal(amount),
+        category=category,
+        description="",
+        source="interactive",
+        debt_identifier=debt_identifier,
+        corrected_entry_id=corrected_entry_id,
+        note=note,
+    )
+
+
 class FakeProgressService:
     """Small service fake exposing the progress workflow's service boundary."""
 
@@ -104,6 +131,7 @@ class FakeProgressService:
         self.calls = []
         self.actual_entry_calls = []
         self.balance_observation_calls = []
+        self.reversal_calls = []
 
     def _raise_if_requested(self, method: str) -> None:
         if self.error_method == method:
@@ -191,6 +219,46 @@ class FakeProgressService:
         self.observations.append(observation)
         return observation
 
+    def reverse_actual_entry(self, entry_id, *, plan_id=None, note="Correction"):
+        self.calls.append(("reverse_actual_entry", entry_id))
+        self._raise_if_requested("reverse_actual_entry")
+        original = next(
+            (entry for entry in self.actual_entries if entry.id == entry_id),
+            None,
+        )
+        if original is None:
+            raise ValueError("recorded activity was not found.")
+        if plan_id is not None and original.plan_id != plan_id:
+            raise ValueError(
+                "recorded activity does not belong to the selected plan."
+            )
+        if original.corrected_entry_id is not None:
+            raise ValueError("a reversal entry cannot be reversed.")
+        if any(
+            entry.corrected_entry_id == original.id
+            for entry in self.actual_entries
+        ):
+            raise ValueError("recorded activity has already been reversed.")
+        reversal = actual_entry(
+            max(entry.id for entry in self.actual_entries) + 1,
+            original.entry_date,
+            original.entry_type,
+            str(-original.amount),
+            category=original.category,
+            debt_identifier=original.debt_identifier,
+            note=note,
+            corrected_entry_id=original.id,
+        )
+        self.actual_entries.append(reversal)
+        self.reversal_calls.append(
+            {
+                "entry_id": entry_id,
+                "plan_id": plan_id,
+                "note": note,
+            }
+        )
+        return reversal
+
 
 def output_text(output: list[str]) -> str:
     """Join captured output for readable assertions."""
@@ -200,7 +268,7 @@ def output_text(output: list[str]) -> str:
 def test_progress_menu_routes_summary_and_forecast_actions() -> None:
     """The menu opens both read-only views and returns through Back."""
     service = FakeProgressService()
-    choices = iter(["1", "", "2", "", "5"])
+    choices = iter(["1", "", "2", "", "6"])
     output = []
 
     result = plan_progress.run_plan_progress_menu(
@@ -217,7 +285,8 @@ def test_progress_menu_routes_summary_and_forecast_actions() -> None:
     assert "2. Forecast vs Actual" in text
     assert "3. Record Activity" in text
     assert "4. Record Balance" in text
-    assert "5. Back" in text
+    assert "5. Review Recorded Activity" in text
+    assert "6. Back" in text
     assert "Recorded transactions" in text
     assert "Debt payments" in text
 
@@ -317,7 +386,7 @@ def test_progress_summary_reports_empty_progress_without_comparison_call() -> No
 def test_progress_menu_invalid_selection_then_back() -> None:
     """Invalid choices receive the generic friendly warning and redisplay."""
     service = FakeProgressService()
-    choices = iter(["invalid", "5"])
+    choices = iter(["invalid", "6"])
     output = []
 
     plan_progress.run_plan_progress_menu(
@@ -327,7 +396,7 @@ def test_progress_menu_invalid_selection_then_back() -> None:
         output_func=output.append,
     )
 
-    assert "Warning: Please choose one of: 1, 2, 3, 4, 5." in output
+    assert "Warning: Please choose one of: 1, 2, 3, 4, 5, 6." in output
     assert output.count("Track Progress - Household Plan") == 2
 
 
@@ -461,7 +530,7 @@ def test_progress_menu_routes_to_record_activity(monkeypatch) -> None:
         lambda *_args, **_kwargs: calls.append("record") or False,
     )
 
-    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["3", "5"])
+    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["3", "6"])
 
     assert calls == ["record"]
 
@@ -862,7 +931,7 @@ def test_progress_menu_routes_to_record_balance(monkeypatch) -> None:
         lambda *_args, **_kwargs: calls.append("balance") or False,
     )
 
-    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["4", "5"])
+    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["4", "6"])
 
     assert calls == ["balance"]
 
@@ -1249,3 +1318,406 @@ def test_recorded_balance_refreshes_progress_summary() -> None:
     assert "Balance observations" in text
     assert "1" in text
     assert "On track" in text
+
+
+def test_progress_menu_routes_to_recorded_activity_review(monkeypatch) -> None:
+    """Track Progress opens the activity-review workflow."""
+    service = FakeProgressService()
+    calls = []
+    monkeypatch.setattr(
+        plan_progress,
+        "run_entry_review_menu",
+        lambda *_args, **_kwargs: calls.append("review") or False,
+    )
+
+    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["5", "6"])
+
+    assert calls == ["review"]
+
+
+def test_entry_review_menu_routes_views_and_reversal(monkeypatch) -> None:
+    """The review submenu delegates both supported actions and Back."""
+    service = FakeProgressService()
+    routed = []
+    monkeypatch.setattr(
+        plan_progress,
+        "view_recent_entries_action",
+        lambda *_args, **_kwargs: routed.append("view") or False,
+    )
+    monkeypatch.setattr(
+        plan_progress,
+        "reverse_entry_action",
+        lambda *_args, **_kwargs: routed.append("reverse") or False,
+    )
+
+    _, output = run_with_inputs(
+        plan_progress.run_entry_review_menu,
+        service,
+        ["1", "2", "3"],
+    )
+
+    assert routed == ["view", "reverse"]
+    text = output_text(output)
+    assert "Review Recorded Activity" in text
+    assert "1. View Recent Entries" in text
+    assert "2. Reverse an Entry" in text
+    assert "3. Back" in text
+    assert "Correct an Entry" not in text
+
+
+def test_entry_review_menu_invalid_selection_then_back() -> None:
+    """Invalid review choices receive shared menu validation."""
+    service = FakeProgressService()
+
+    _, output = run_with_inputs(
+        plan_progress.run_entry_review_menu,
+        service,
+        ["invalid", "3"],
+    )
+
+    assert "Warning: Please choose one of: 1, 2, 3." in output
+    assert output.count("Review Recorded Activity") == 2
+
+
+def test_recent_entries_display_names_notes_status_and_newest_first() -> None:
+    """Recent activity is readable, ordered, and marks both audit states."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7101,
+        date(2026, 7, 22),
+        ActualEntryType.DEBT_PAYMENT,
+        "125.00",
+        debt_identifier="Citi",
+        note="Online payment",
+    )
+    bill = actual_entry(
+        7102,
+        date(2026, 7, 23),
+        ActualEntryType.BILL_PAID,
+        "45.00",
+        category="Electric",
+    )
+    reversal = actual_entry(
+        7103,
+        date(2026, 7, 22),
+        ActualEntryType.DEBT_PAYMENT,
+        "-125.00",
+        debt_identifier="Citi",
+        note="Duplicate payment",
+        corrected_entry_id=original.id,
+    )
+    service.actual_entries = [original, bill, reversal]
+
+    _, output = run_with_inputs(
+        plan_progress.view_recent_entries_action,
+        service,
+        [""],
+    )
+
+    text = output_text(output)
+    bill_position = text.index("07/23/2026 - Bill Payment - Electric - $45.00")
+    reversal_position = text.index(
+        "07/22/2026 - Debt Payment - Citi - $-125.00"
+    )
+    original_position = text.index(
+        "07/22/2026 - Debt Payment - Citi - $125.00"
+    )
+    assert bill_position < reversal_position < original_position
+    assert "Note: Online payment" in text
+    assert "Note: Duplicate payment - Reversal" in text
+    assert "Online payment - Reversed" in text
+    assert "7101" not in text
+    assert "7102" not in text
+    assert "7103" not in text
+
+
+def test_recent_entries_handles_empty_activity_and_excludes_balances() -> None:
+    """Balance observations never appear in actual-activity review."""
+    service = FakeProgressService()
+    service.actual_entries = []
+    service.observations = [
+        SimpleNamespace(id=8801, note="Private balance observation")
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.view_recent_entries_action,
+        service,
+        [""],
+    )
+
+    assert "Warning: No recorded activity entries were found." in output
+    assert "Private balance observation" not in output_text(output)
+    assert "8801" not in output_text(output)
+
+
+def test_recent_entries_handles_service_failure() -> None:
+    """Expected list failures are reported without escaping the review screen."""
+    service = FakeProgressService()
+    service.error_method = "list_actual_entries"
+
+    _, output = run_with_inputs(
+        plan_progress.view_recent_entries_action,
+        service,
+        [""],
+    )
+
+    assert "Error: list_actual_entries failed" in output
+
+
+def test_recent_entries_limit_is_newest_twenty() -> None:
+    """Review uses a bounded, deterministic recent-entry list."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            8000 + index,
+            date(2026, 7, 24),
+            ActualEntryType.PERSONAL_SPENDING,
+            str(index),
+            note=f"Recent {index}",
+        )
+        for index in range(1, 26)
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.view_recent_entries_action,
+        service,
+        [""],
+    )
+
+    text = output_text(output)
+    assert "Recent 25" in text
+    assert "Recent 6" in text
+    assert "Recent 5" not in text
+    assert sum(line[:1].isdigit() for line in output) == 20
+
+
+def test_reverse_entry_requires_explicit_confirmation_and_preserves_original() -> None:
+    """A confirmed reversal appends an opposite entry without editing the original."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7201,
+        date(2026, 7, 24),
+        ActualEntryType.INCOME_RECEIVED,
+        "2100.00",
+        note="Paycheck",
+    )
+    service.actual_entries = [original]
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        ["1", "REVERSE", ""],
+    )
+
+    assert service.reversal_calls == [
+        {
+            "entry_id": original.id,
+            "plan_id": service.plan.id,
+            "note": "Reversed from interactive review",
+        }
+    ]
+    assert service.actual_entries[0] is original
+    assert service.actual_entries[0].amount == Decimal("2100.00")
+    reversal = service.actual_entries[1]
+    assert reversal.amount == Decimal("-2100.00")
+    assert reversal.corrected_entry_id == original.id
+    assert "Success: Recorded activity reversed successfully." in output
+    assert "7201" not in output_text(output)
+
+
+@pytest.mark.parametrize("confirmation", ["", "yes", "reverse", "cancel"])
+def test_reverse_entry_rejects_nonexact_confirmation(confirmation) -> None:
+    """Only the exact explicit REVERSE token permits persistence."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7301,
+            date(2026, 7, 24),
+            ActualEntryType.PERSONAL_SPENDING,
+            "20.00",
+        )
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        ["1", confirmation],
+    )
+
+    assert service.reversal_calls == []
+    assert "Warning: Activity reversal cancelled." in output
+
+
+def test_reverse_entry_selection_can_be_cancelled() -> None:
+    """The numbered selection Cancel option performs no persistence."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7401,
+            date(2026, 7, 24),
+            ActualEntryType.SAVINGS_DEPOSIT,
+            "50.00",
+        )
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        ["2"],
+    )
+
+    assert service.reversal_calls == []
+    assert "Warning: Activity reversal cancelled." in output
+
+
+def test_reverse_entry_handles_no_recorded_activity() -> None:
+    """An empty activity history returns safely without offering raw identifiers."""
+    service = FakeProgressService()
+    service.actual_entries = []
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        [],
+    )
+
+    assert "Warning: No recorded activity entries were found." in output
+    assert "Warning: Activity reversal cancelled." in output
+    assert service.reversal_calls == []
+
+
+@pytest.mark.parametrize(
+    ("selection", "message"),
+    [
+        ("2", "Error: That recorded activity has already been reversed."),
+        ("1", "Error: A reversal entry cannot be reversed."),
+    ],
+)
+def test_reverse_entry_rejects_ineligible_audit_rows(selection, message) -> None:
+    """Reversed originals and reversal rows are visibly ineligible."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7501,
+        date(2026, 7, 24),
+        ActualEntryType.BILL_PAID,
+        "80.00",
+        category="Internet",
+    )
+    reversal = actual_entry(
+        7502,
+        date(2026, 7, 24),
+        ActualEntryType.BILL_PAID,
+        "-80.00",
+        category="Internet",
+        corrected_entry_id=original.id,
+    )
+    service.actual_entries = [original, reversal]
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        [selection, ""],
+    )
+
+    assert message in output
+    assert service.reversal_calls == []
+
+
+def test_reverse_entry_reprompts_invalid_numbered_choice() -> None:
+    """Invalid entry selections re-prompt without exposing identifiers."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7601,
+            date(2026, 7, 24),
+            ActualEntryType.ADJUSTMENT,
+            "10.00",
+        )
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        ["invalid", "1", "REVERSE", ""],
+    )
+
+    assert "Warning: Please choose one of: 1, 2." in output
+    assert len(service.reversal_calls) == 1
+    assert "7601" not in output_text(output)
+
+
+def test_reverse_entry_handles_service_failure() -> None:
+    """Expected service failures return safely without false success."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7701,
+            date(2026, 7, 24),
+            ActualEntryType.INCOME_RECEIVED,
+            "100.00",
+        )
+    ]
+    service.error_method = "reverse_actual_entry"
+
+    _, output = run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        ["1", "REVERSE", ""],
+    )
+
+    assert "Error: reverse_actual_entry failed" in output
+    assert not any(line.startswith("Success:") for line in output)
+
+
+def test_entry_review_handles_stale_plan_and_missing_version() -> None:
+    """Review resolves the selected plan and latest version before listing activity."""
+    service = FakeProgressService()
+    stale_output = []
+
+    plan_progress.run_entry_review_menu(
+        service,
+        SimpleNamespace(id=9999, name="Missing"),
+        input_func=lambda _prompt: "",
+        output_func=stale_output.append,
+    )
+
+    assert "Error: selected plan was not found." in stale_output
+    assert "9999" not in output_text(stale_output)
+
+    service.plan.current_version_id = None
+    service.versions = []
+    _, missing_output = run_with_inputs(
+        plan_progress.run_entry_review_menu,
+        service,
+        [""],
+    )
+    assert "Error: selected plan does not have any saved versions." in missing_output
+
+
+def test_reversal_refreshes_progress_from_service_history() -> None:
+    """Subsequent progress output reloads the appended immutable audit entry."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7801,
+        date(2026, 7, 24),
+        ActualEntryType.DEBT_PAYMENT,
+        "125.00",
+        debt_identifier="Citi",
+    )
+    service.actual_entries = [original]
+    service.observations = []
+
+    run_with_inputs(
+        plan_progress.reverse_entry_action,
+        service,
+        ["1", "REVERSE", ""],
+    )
+    _, output = run_with_inputs(
+        plan_progress.show_progress_summary,
+        service,
+        [""],
+    )
+
+    assert sum(entry.amount for entry in service.actual_entries) == Decimal("0.00")
+    assert "Recorded transactions" in output_text(output)
+    assert "2" in output_text(output)

@@ -36,14 +36,28 @@ __all__ = [
     "record_personal_spending_action",
     "record_savings_balance_action",
     "record_savings_deposit_action",
+    "reverse_entry_action",
+    "run_entry_review_menu",
     "run_record_activity_menu",
     "run_record_balance_menu",
     "run_plan_progress_menu",
     "show_forecast_vs_actual",
     "show_progress_summary",
+    "view_recent_entries_action",
 ]
 
 EXPECTED_SERVICE_ERRORS = (FileNotFoundError, ValueError, RuntimeError, OSError)
+RECENT_ENTRY_LIMIT = 20
+
+ACTIVITY_TYPE_LABELS = {
+    ActualEntryType.INCOME_RECEIVED: "Income Received",
+    ActualEntryType.BILL_PAID: "Bill Payment",
+    ActualEntryType.DEBT_PAYMENT: "Debt Payment",
+    ActualEntryType.SAVINGS_DEPOSIT: "Savings Deposit",
+    ActualEntryType.SAVINGS_WITHDRAWAL: "Savings Withdrawal",
+    ActualEntryType.PERSONAL_SPENDING: "Personal Spending",
+    ActualEntryType.ADJUSTMENT: "Adjustment",
+}
 
 
 def run_plan_progress_menu(
@@ -101,7 +115,17 @@ def run_plan_progress_menu(
                 output_func,
             ),
         ),
-        MenuOption("5", "Back", lambda: True),
+        MenuOption(
+            "5",
+            "Review Recorded Activity",
+            lambda: run_entry_review_menu(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("6", "Back", lambda: True),
     ]
     run_menu(
         title=f"Track Progress - {display_plan_name(current_plan)}",
@@ -195,6 +219,119 @@ def run_record_activity_menu(
         input_func=input_func,
         output_func=output_func,
     )
+    return False
+
+
+def run_entry_review_menu(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Open recent-activity review and safe reversal actions."""
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    options = [
+        MenuOption(
+            "1",
+            "View Recent Entries",
+            lambda: view_recent_entries_action(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "2",
+            "Reverse an Entry",
+            lambda: reverse_entry_action(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("3", "Back", lambda: True),
+    ]
+    run_menu(
+        title="Review Recorded Activity",
+        options=options,
+        input_func=input_func,
+        output_func=output_func,
+    )
+    return False
+
+
+def view_recent_entries_action(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Display recent actual activity without internal identifiers."""
+    output_func("")
+    print_section_header("Recent Recorded Activity", output_func)
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+        entries = _recent_actual_entries(service, current_plan)
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+    else:
+        if not entries:
+            print_warning("No recorded activity entries were found.", output_func)
+        else:
+            reversed_ids = _reversed_entry_ids(entries)
+            for index, entry in enumerate(entries, start=1):
+                output_func(
+                    f"{index}. {_format_actual_entry(entry, reversed_ids)}"
+                )
+    wait_for_enter(input_func)
+    return False
+
+
+def reverse_entry_action(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Select and explicitly confirm one eligible activity reversal."""
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+        entries = _recent_actual_entries(service, current_plan)
+        selected = _select_actual_entry(entries, input_func, output_func)
+        if selected is None:
+            print_warning("Activity reversal cancelled.", output_func)
+            return False
+        reversed_ids = _reversed_entry_ids(entries)
+        _validate_reversal_selection(selected, reversed_ids)
+        output_func("")
+        output_func(f"Selected: {_format_actual_entry(selected, reversed_ids)}")
+        output_func(
+            "Reversal preserves the original entry and adds an equal opposite entry."
+        )
+        confirmation = input_func("Type REVERSE to confirm: ").strip()
+        if confirmation != "REVERSE":
+            print_warning("Activity reversal cancelled.", output_func)
+            return False
+        service.reverse_actual_entry(
+            selected.id,
+            plan_id=current_plan.id,
+            note="Reversed from interactive review",
+        )
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    print_success("Recorded activity reversed successfully.", output_func)
+    wait_for_enter(input_func)
     return False
 
 
@@ -522,6 +659,99 @@ def show_forecast_vs_actual(
 
 class _ActivityCancelled(Exception):
     """Signal cancellation before an activity is persisted."""
+
+
+def _recent_actual_entries(
+    service: PlanHistoryService,
+    plan: Any,
+) -> list[Any]:
+    """Return the most recent actual entries for the selected plan."""
+    entries = service.list_actual_entries(plan.id)
+    return sorted(
+        entries,
+        key=lambda entry: (entry.entry_date, entry.id),
+        reverse=True,
+    )[:RECENT_ENTRY_LIMIT]
+
+
+def _reversed_entry_ids(entries: list[Any]) -> set[int]:
+    """Return original entry identifiers referenced by visible reversals."""
+    return {
+        entry.corrected_entry_id
+        for entry in entries
+        if entry.corrected_entry_id is not None
+    }
+
+
+def _select_actual_entry(
+    entries: list[Any],
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> Any | None:
+    """Select recent actual activity by display number."""
+    if not entries:
+        print_warning("No recorded activity entries were found.", output_func)
+        return None
+
+    reversed_ids = _reversed_entry_ids(entries)
+    output_func("")
+    print_section_header("Select Recorded Activity", output_func)
+    for index, entry in enumerate(entries, start=1):
+        output_func(f"{index}. {_format_actual_entry(entry, reversed_ids)}")
+    cancel_key = str(len(entries) + 1)
+    output_func(f"{cancel_key}. Cancel")
+    while True:
+        choice = input_func("Choose an option: ").strip()
+        if choice == cancel_key:
+            return None
+        try:
+            selected_index = int(choice)
+        except ValueError:
+            selected_index = 0
+        if 1 <= selected_index <= len(entries):
+            return entries[selected_index - 1]
+        print_warning(
+            f"Please choose one of: {', '.join(str(index) for index in range(1, len(entries) + 2))}.",
+            output_func,
+        )
+
+
+def _validate_reversal_selection(entry: Any, reversed_ids: set[int]) -> None:
+    """Reject reversal entries and originals already neutralized."""
+    if entry.corrected_entry_id is not None:
+        raise ValueError("A reversal entry cannot be reversed.")
+    if entry.id in reversed_ids:
+        raise ValueError("That recorded activity has already been reversed.")
+
+
+def _format_actual_entry(entry: Any, reversed_ids: set[int]) -> str:
+    """Format one actual entry using only user-facing values."""
+    entry_type = ActualEntryType(str(entry.entry_type))
+    label = ACTIVITY_TYPE_LABELS.get(
+        entry_type,
+        entry_type.value.replace("_", " ").title(),
+    )
+    details = [f"{entry.entry_date:%m/%d/%Y}", label]
+    association = _entry_association(entry, entry_type)
+    if association:
+        details.append(association)
+    details.append(format_currency(entry.amount))
+    if entry.note:
+        details.append(f"Note: {entry.note}")
+    if entry.corrected_entry_id is not None:
+        details.append("Reversal")
+    elif entry.id in reversed_ids:
+        details.append("Reversed")
+    return " - ".join(details)
+
+
+def _entry_association(entry: Any, entry_type: ActualEntryType) -> str:
+    """Return a useful debt or bill name for one actual entry."""
+    if entry.debt_identifier:
+        return entry.debt_identifier
+    if entry_type == ActualEntryType.BILL_PAID and entry.category:
+        return entry.category
+    return ""
 
 
 def _record_balance(

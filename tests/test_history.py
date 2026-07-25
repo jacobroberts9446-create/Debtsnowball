@@ -209,9 +209,18 @@ def test_actual_entries_reverse_and_compare_without_moralizing(tmp_path):
     )
     reversal = service.reverse_actual_entry(income.id)
     comparison = service.compare_forecast_to_actual(plan.id)
+    entries = service.list_actual_entries(plan.id)
 
     assert reversal.amount == Decimal("-2234.00")
     assert reversal.corrected_entry_id == income.id
+    assert reversal.source == "correction"
+    assert income in entries
+    assert reversal in entries
+    assert sum(
+        entry.amount
+        for entry in entries
+        if entry.entry_type == ActualEntryType.INCOME_RECEIVED
+    ) == Decimal("0.00")
     assert comparison.status in {
         "Ahead of plan",
         "On track",
@@ -220,6 +229,19 @@ def test_actual_entries_reverse_and_compare_without_moralizing(tmp_path):
     }
     assert "bad" not in comparison.status.casefold()
     assert "failed" not in comparison.status.casefold()
+
+    with pytest.raises(ValueError, match="already been reversed"):
+        service.reverse_actual_entry(income.id, plan_id=plan.id)
+    with pytest.raises(ValueError, match="reversal entry"):
+        service.reverse_actual_entry(reversal.id, plan_id=plan.id)
+
+    other_plan = service.create_plan("Other Actual Plan", config)
+    with pytest.raises(ValueError, match="selected plan"):
+        service.reverse_actual_entry(income.id, plan_id=other_plan.id)
+    with pytest.raises(ValueError, match="recorded activity was not found"):
+        service.reverse_actual_entry(999999, plan_id=plan.id)
+
+    assert service.list_actual_entries(plan.id) == entries
 
 
 def test_plan_comparison_reports_tradeoffs_and_first_difference(tmp_path):
