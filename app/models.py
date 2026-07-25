@@ -616,6 +616,15 @@ class ActualTransaction:
 
 
 @dataclass(frozen=True)
+class ActualEntryCorrectionResult:
+    """The immutable rows participating in one atomic activity correction."""
+
+    original: ActualTransaction
+    reversal: ActualTransaction
+    replacement: ActualTransaction
+
+
+@dataclass(frozen=True)
 class DataQualityWarning:
     """Plain-language warning about a plan, forecast, or actual data point."""
 

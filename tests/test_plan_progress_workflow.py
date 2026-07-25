@@ -40,6 +40,7 @@ def actual_entry(
     debt_identifier: str | None = None,
     note: str = "",
     corrected_entry_id: int | None = None,
+    source: str = "interactive",
 ):
     """Build one deterministic actual-activity test record."""
     return SimpleNamespace(
@@ -50,7 +51,7 @@ def actual_entry(
         amount=Decimal(amount),
         category=category,
         description="",
-        source="interactive",
+        source=source,
         debt_identifier=debt_identifier,
         corrected_entry_id=corrected_entry_id,
         note=note,
@@ -132,6 +133,7 @@ class FakeProgressService:
         self.actual_entry_calls = []
         self.balance_observation_calls = []
         self.reversal_calls = []
+        self.correction_calls = []
 
     def _raise_if_requested(self, method: str) -> None:
         if self.error_method == method:
@@ -232,7 +234,10 @@ class FakeProgressService:
             raise ValueError(
                 "recorded activity does not belong to the selected plan."
             )
-        if original.corrected_entry_id is not None:
+        if original.source == "correction" or (
+            original.corrected_entry_id is not None
+            and original.source != "correction_replacement"
+        ):
             raise ValueError("a reversal entry cannot be reversed.")
         if any(
             entry.corrected_entry_id == original.id
@@ -248,6 +253,7 @@ class FakeProgressService:
             debt_identifier=original.debt_identifier,
             note=note,
             corrected_entry_id=original.id,
+            source="correction",
         )
         self.actual_entries.append(reversal)
         self.reversal_calls.append(
@@ -258,6 +264,76 @@ class FakeProgressService:
             }
         )
         return reversal
+
+    def correct_actual_entry(
+        self,
+        plan_id,
+        entry_id,
+        *,
+        entry_date,
+        amount,
+        category,
+        debt_identifier,
+        note,
+    ):
+        self.calls.append(("correct_actual_entry", entry_id))
+        self._raise_if_requested("correct_actual_entry")
+        original = next(
+            (entry for entry in self.actual_entries if entry.id == entry_id),
+            None,
+        )
+        if original is None:
+            raise ValueError("recorded activity was not found.")
+        if original.plan_id != plan_id:
+            raise ValueError(
+                "recorded activity does not belong to the selected plan."
+            )
+        if original.source == "correction":
+            raise ValueError("a reversal entry cannot be corrected.")
+        if any(
+            entry.corrected_entry_id == original.id
+            for entry in self.actual_entries
+        ):
+            raise ValueError("recorded activity has already been superseded.")
+        next_id = max(entry.id for entry in self.actual_entries) + 1
+        reversal = actual_entry(
+            next_id,
+            original.entry_date,
+            original.entry_type,
+            str(-original.amount),
+            category=original.category,
+            debt_identifier=original.debt_identifier,
+            note="Reversed by atomic correction",
+            corrected_entry_id=original.id,
+            source="correction",
+        )
+        replacement = actual_entry(
+            next_id + 1,
+            entry_date,
+            original.entry_type,
+            str(amount),
+            category=category,
+            debt_identifier=debt_identifier,
+            note=note,
+            corrected_entry_id=original.id,
+            source="correction_replacement",
+        )
+        self.actual_entries.extend([reversal, replacement])
+        call = {
+            "plan_id": plan_id,
+            "entry_id": entry_id,
+            "entry_date": entry_date,
+            "amount": amount,
+            "category": category,
+            "debt_identifier": debt_identifier,
+            "note": note,
+        }
+        self.correction_calls.append(call)
+        return SimpleNamespace(
+            original=original,
+            reversal=reversal,
+            replacement=replacement,
+        )
 
 
 def output_text(output: list[str]) -> str:
@@ -1335,14 +1411,19 @@ def test_progress_menu_routes_to_recorded_activity_review(monkeypatch) -> None:
     assert calls == ["review"]
 
 
-def test_entry_review_menu_routes_views_and_reversal(monkeypatch) -> None:
-    """The review submenu delegates both supported actions and Back."""
+def test_entry_review_menu_routes_views_correction_and_reversal(monkeypatch) -> None:
+    """The review submenu delegates all supported actions and Back."""
     service = FakeProgressService()
     routed = []
     monkeypatch.setattr(
         plan_progress,
         "view_recent_entries_action",
         lambda *_args, **_kwargs: routed.append("view") or False,
+    )
+    monkeypatch.setattr(
+        plan_progress,
+        "correct_entry_action",
+        lambda *_args, **_kwargs: routed.append("correct") or False,
     )
     monkeypatch.setattr(
         plan_progress,
@@ -1353,16 +1434,16 @@ def test_entry_review_menu_routes_views_and_reversal(monkeypatch) -> None:
     _, output = run_with_inputs(
         plan_progress.run_entry_review_menu,
         service,
-        ["1", "2", "3"],
+        ["1", "2", "3", "4"],
     )
 
-    assert routed == ["view", "reverse"]
+    assert routed == ["view", "correct", "reverse"]
     text = output_text(output)
     assert "Review Recorded Activity" in text
     assert "1. View Recent Entries" in text
-    assert "2. Reverse an Entry" in text
-    assert "3. Back" in text
-    assert "Correct an Entry" not in text
+    assert "2. Correct an Entry" in text
+    assert "3. Reverse an Entry" in text
+    assert "4. Back" in text
 
 
 def test_entry_review_menu_invalid_selection_then_back() -> None:
@@ -1372,10 +1453,10 @@ def test_entry_review_menu_invalid_selection_then_back() -> None:
     _, output = run_with_inputs(
         plan_progress.run_entry_review_menu,
         service,
-        ["invalid", "3"],
+        ["invalid", "4"],
     )
 
-    assert "Warning: Please choose one of: 1, 2, 3." in output
+    assert "Warning: Please choose one of: 1, 2, 3, 4." in output
     assert output.count("Review Recorded Activity") == 2
 
 
@@ -1405,6 +1486,7 @@ def test_recent_entries_display_names_notes_status_and_newest_first() -> None:
         debt_identifier="Citi",
         note="Duplicate payment",
         corrected_entry_id=original.id,
+        source="correction",
     )
     service.actual_entries = [original, bill, reversal]
 
@@ -1489,6 +1571,290 @@ def test_recent_entries_limit_is_newest_twenty() -> None:
     assert "Recent 6" in text
     assert "Recent 5" not in text
     assert sum(line[:1].isdigit() for line in output) == 20
+
+
+def test_correct_entry_blank_fields_retain_current_values() -> None:
+    """Blank replacement prompts preserve every editable current value."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7150,
+        date(2026, 7, 24),
+        ActualEntryType.INCOME_RECEIVED,
+        "2100.00",
+        category="Income",
+        note="Paycheck",
+    )
+    service.actual_entries = [original]
+
+    _, output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        ["1", "", "", "", "", "CORRECT", ""],
+    )
+
+    assert service.correction_calls == [
+        {
+            "plan_id": service.plan.id,
+            "entry_id": original.id,
+            "entry_date": original.entry_date,
+            "amount": Decimal("2100.00"),
+            "category": "Income",
+            "debt_identifier": None,
+            "note": "Paycheck",
+        }
+    ]
+    assert "Success: Recorded activity corrected successfully." in output
+    assert "7150" not in output_text(output)
+
+
+@pytest.mark.parametrize(
+    ("entry_type", "category", "debt_identifier", "selection", "expected"),
+    [
+        (ActualEntryType.BILL_PAID, "Electric", None, "2", ("Internet", None)),
+        (
+            ActualEntryType.DEBT_PAYMENT,
+            "Debt Payment",
+            "Card A",
+            "2",
+            ("Debt Payment", "Card B"),
+        ),
+    ],
+)
+def test_correct_entry_uses_numbered_bill_and_debt_choices(
+    entry_type,
+    category,
+    debt_identifier,
+    selection,
+    expected,
+) -> None:
+    """Associations are selected by readable saved names rather than raw IDs."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7160,
+            date(2026, 7, 24),
+            entry_type,
+            "75.00",
+            category=category,
+            debt_identifier=debt_identifier,
+        )
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        ["1", "", "$80.25", selection, "Updated", "CORRECT", ""],
+    )
+
+    call = service.correction_calls[0]
+    assert (call["category"], call["debt_identifier"]) == expected
+    assert call["amount"] == Decimal("80.25")
+    assert "Card B" in output_text(output) or "Internet" in output_text(output)
+    assert "7160" not in output_text(output)
+
+
+def test_correct_entry_reprompts_invalid_date_and_amount() -> None:
+    """Only invalid replacement fields are re-prompted."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7170,
+            date(2026, 7, 24),
+            ActualEntryType.PERSONAL_SPENDING,
+            "20.00",
+            category="Personal Spending",
+        )
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        [
+            "1",
+            "02/30/2026",
+            "07/25/2026",
+            "0",
+            "not money",
+            "25.50",
+            "",
+            "",
+            "CORRECT",
+            "",
+        ],
+    )
+
+    call = service.correction_calls[0]
+    assert call["entry_date"] == date(2026, 7, 25)
+    assert call["amount"] == Decimal("25.50")
+    assert "Warning: Enter a valid date in MM/DD/YYYY format." in output
+    assert output.count("Warning: Enter an amount greater than $0.00.") == 2
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        ["2"],
+        ["1", "cancel"],
+        ["1", "", "cancel"],
+        ["1", "", "", "cancel"],
+        ["1", "", "", "", "cancel"],
+        ["1", "", "", "", "", "no"],
+    ],
+)
+def test_correct_entry_cancellation_never_persists(inputs) -> None:
+    """Every cancellation point returns without invoking the correction service."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7180,
+            date(2026, 7, 24),
+            ActualEntryType.INCOME_RECEIVED,
+            "100.00",
+            category="Income",
+        )
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        inputs,
+    )
+
+    assert service.correction_calls == []
+    assert "Warning: Activity correction cancelled." in output
+
+
+def test_correct_entry_rejects_reversal_and_superseded_rows() -> None:
+    """Audit rows and superseded originals are visibly ineligible."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7190,
+        date(2026, 7, 24),
+        ActualEntryType.BILL_PAID,
+        "80.00",
+        category="Internet",
+    )
+    reversal = actual_entry(
+        7191,
+        date(2026, 7, 24),
+        ActualEntryType.BILL_PAID,
+        "-80.00",
+        category="Internet",
+        corrected_entry_id=original.id,
+        source="correction",
+    )
+    service.actual_entries = [original, reversal]
+
+    _, reversal_output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        ["1", ""],
+    )
+    _, original_output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        ["2", ""],
+    )
+
+    assert "Error: A reversal entry cannot be corrected." in reversal_output
+    assert (
+        "Error: That recorded activity has already been corrected or reversed."
+        in original_output
+    )
+    assert service.correction_calls == []
+
+
+def test_correct_entry_handles_service_failure_without_false_success() -> None:
+    """A persistence error is shown and the reviewed activity remains available."""
+    service = FakeProgressService()
+    service.actual_entries = [
+        actual_entry(
+            7200,
+            date(2026, 7, 24),
+            ActualEntryType.ADJUSTMENT,
+            "10.00",
+            category="Adjustment",
+        )
+    ]
+    service.error_method = "correct_actual_entry"
+
+    _, output = run_with_inputs(
+        plan_progress.correct_entry_action,
+        service,
+        ["1", "", "-5.00", "", "", "CORRECT", ""],
+    )
+
+    assert "Error: correct_actual_entry failed" in output
+    assert not any(line.startswith("Success:") for line in output)
+    assert len(service.actual_entries) == 1
+
+
+def test_recent_entries_distinguish_full_correction_chain() -> None:
+    """Originals, reversals, and current/superseded replacements have clear labels."""
+    service = FakeProgressService()
+    original = actual_entry(
+        7210,
+        date(2026, 7, 20),
+        ActualEntryType.INCOME_RECEIVED,
+        "100.00",
+        category="Income",
+    )
+    reversal = actual_entry(
+        7211,
+        original.entry_date,
+        original.entry_type,
+        "-100.00",
+        category="Income",
+        corrected_entry_id=original.id,
+        source="correction",
+    )
+    first_replacement = actual_entry(
+        7212,
+        date(2026, 7, 21),
+        original.entry_type,
+        "110.00",
+        category="Income",
+        corrected_entry_id=original.id,
+        source="correction_replacement",
+    )
+    second_reversal = actual_entry(
+        7213,
+        first_replacement.entry_date,
+        original.entry_type,
+        "-110.00",
+        category="Income",
+        corrected_entry_id=first_replacement.id,
+        source="correction",
+    )
+    current = actual_entry(
+        7214,
+        date(2026, 7, 22),
+        original.entry_type,
+        "120.00",
+        category="Income",
+        corrected_entry_id=first_replacement.id,
+        source="correction_replacement",
+    )
+    service.actual_entries = [
+        original,
+        reversal,
+        first_replacement,
+        second_reversal,
+        current,
+    ]
+
+    _, output = run_with_inputs(
+        plan_progress.view_recent_entries_action,
+        service,
+        [""],
+    )
+
+    text = output_text(output)
+    assert "Corrected Original" in text
+    assert "Reversal" in text
+    assert "Corrected Entry (Corrected)" in text
+    assert "Corrected Entry (Current)" in text
+    assert all(str(entry.id) not in text for entry in service.actual_entries)
 
 
 def test_reverse_entry_requires_explicit_confirmation_and_preserves_original() -> None:

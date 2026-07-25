@@ -2,6 +2,7 @@ import csv
 import json
 import sqlite3
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal
@@ -36,6 +37,22 @@ def short_plan(config):
     periods = CalendarEngine(config.settings).generate(forecast.forecast_end_date)
     summaries = BudgetEngine(config).build_plan(periods)
     return summaries, forecast
+
+
+def history_plan_with_forecast(service, name="Correction Plan"):
+    """Create one saved plan with forecast periods for actual-entry tests."""
+    config = Config().load("config.json")
+    summaries, forecast = short_plan(config)
+    plan = service.create_plan(name, config)
+    version = service.list_plan_versions(plan.id)[0]
+    service.generate_and_save_forecast(
+        version.id,
+        forecast,
+        starting_savings=config.settings.starting_savings,
+        pay_period_summaries=summaries,
+        starting_debts=config.debts,
+    )
+    return config, plan
 
 
 def exported_plan_payload(tmp_path, *, name="Tamper Plan"):
@@ -242,6 +259,395 @@ def test_actual_entries_reverse_and_compare_without_moralizing(tmp_path):
         service.reverse_actual_entry(999999, plan_id=plan.id)
 
     assert service.list_actual_entries(plan.id) == entries
+
+
+def test_atomic_actual_correction_preserves_rows_periods_and_totals(tmp_path):
+    service = PlanHistoryService(tmp_path / "correction.sqlite")
+    _, plan = history_plan_with_forecast(service)
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("2000.00"),
+        category="Income",
+        note="Original",
+    )
+
+    result = service.correct_actual_entry(
+        plan.id,
+        original.id,
+        entry_date=date(2026, 8, 1),
+        amount=Decimal("2100.00"),
+        category="Income",
+        debt_identifier=None,
+        note="Corrected paycheck",
+    )
+
+    assert result.original == original
+    assert result.reversal.amount == Decimal("-2000.00")
+    assert result.reversal.source == "correction"
+    assert result.reversal.corrected_entry_id == original.id
+    assert result.replacement.amount == Decimal("2100.00")
+    assert result.replacement.entry_date == date(2026, 8, 1)
+    assert result.replacement.note == "Corrected paycheck"
+    assert result.replacement.source == "correction_replacement"
+    assert result.replacement.corrected_entry_id == original.id
+    assert service.compare_forecast_to_actual(plan.id).actual_income == Decimal(
+        "2100.00"
+    )
+
+    with closing(sqlite3.connect(tmp_path / "correction.sqlite")) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, forecast_period_id
+            FROM actual_transactions
+            WHERE id IN (?, ?, ?)
+            ORDER BY id
+            """,
+            (original.id, result.reversal.id, result.replacement.id),
+        ).fetchall()
+    assert rows[0][1] == rows[1][1]
+    assert rows[2][1] != rows[0][1]
+
+
+def test_atomic_correction_supports_associations_and_replacement_chains(tmp_path):
+    service = PlanHistoryService(tmp_path / "chains.sqlite")
+    _, plan = history_plan_with_forecast(service)
+    bill = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.BILL_PAID,
+        Decimal("80.00"),
+        category="Internet",
+    )
+    first = service.correct_actual_entry(
+        plan.id,
+        bill.id,
+        entry_date=bill.entry_date,
+        amount=Decimal("85.00"),
+        category="Fiber Internet",
+        debt_identifier=None,
+        note="Updated bill",
+    )
+    second = service.correct_actual_entry(
+        plan.id,
+        first.replacement.id,
+        entry_date=date(2026, 7, 21),
+        amount=Decimal("90.00"),
+        category="Fiber Internet",
+        debt_identifier=None,
+        note="Final bill",
+    )
+    debt = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.DEBT_PAYMENT,
+        Decimal("100.00"),
+        category="Debt Payment",
+        debt_identifier="Card A",
+    )
+    debt_result = service.correct_actual_entry(
+        plan.id,
+        debt.id,
+        entry_date=debt.entry_date,
+        amount=Decimal("125.00"),
+        category="Debt Payment",
+        debt_identifier="Card B",
+        note="Correct card",
+    )
+
+    assert second.reversal.corrected_entry_id == first.replacement.id
+    assert second.replacement.corrected_entry_id == first.replacement.id
+    assert second.replacement.category == "Fiber Internet"
+    assert debt_result.replacement.debt_identifier == "Card B"
+    comparison = service.compare_forecast_to_actual(plan.id)
+    assert comparison.actual_bills == Decimal("90.00")
+    assert comparison.actual_debt_payments == Decimal("125.00")
+
+    final_reversal = service.reverse_actual_entry(
+        second.replacement.id,
+        plan_id=plan.id,
+    )
+    assert final_reversal.corrected_entry_id == second.replacement.id
+    assert service.compare_forecast_to_actual(plan.id).actual_bills == Decimal(
+        "0.00"
+    )
+
+
+@pytest.mark.parametrize("failure_source", ["correction", "correction_replacement"])
+def test_atomic_correction_rolls_back_both_rows_on_insert_failure(
+    tmp_path,
+    failure_source,
+):
+    database_path = tmp_path / f"rollback-{failure_source}.sqlite"
+    service = PlanHistoryService(database_path)
+    _, plan = history_plan_with_forecast(service)
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.PERSONAL_SPENDING,
+        Decimal("25.00"),
+        category="Personal Spending",
+    )
+    with closing(sqlite3.connect(database_path)) as conn:
+        conn.execute(
+            f"""
+            CREATE TRIGGER fail_correction_insert
+            BEFORE INSERT ON actual_transactions
+            WHEN NEW.source = '{failure_source}'
+            BEGIN
+                SELECT RAISE(ABORT, 'injected correction failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="injected correction failure"):
+        service.correct_actual_entry(
+            plan.id,
+            original.id,
+            entry_date=original.entry_date,
+            amount=Decimal("30.00"),
+            category=original.category,
+            debt_identifier=None,
+            note="Should roll back",
+        )
+
+    assert service.list_actual_entries(plan.id) == [original]
+
+
+def test_atomic_correction_validates_targets_signs_and_associations(tmp_path):
+    service = PlanHistoryService(tmp_path / "validation.sqlite")
+    _, plan = history_plan_with_forecast(service)
+    other_plan = service.create_plan("Other Correction Plan", Config().load("config.json"))
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("100.00"),
+        category="Income",
+    )
+
+    base = {
+        "entry_date": original.entry_date,
+        "amount": Decimal("110.00"),
+        "category": original.category,
+        "debt_identifier": None,
+        "note": "",
+    }
+    with pytest.raises(ValueError, match="selected plan"):
+        service.correct_actual_entry(other_plan.id, original.id, **base)
+    with pytest.raises(ValueError, match="recorded activity was not found"):
+        service.correct_actual_entry(plan.id, 999999, **base)
+    with pytest.raises(ValueError, match="greater than"):
+        service.correct_actual_entry(
+            plan.id,
+            original.id,
+            **{**base, "amount": Decimal("0.00")},
+        )
+    with pytest.raises(ValueError, match="debt name"):
+        service.correct_actual_entry(
+            plan.id,
+            original.id,
+            **{**base, "debt_identifier": "Card A"},
+        )
+
+    adjustment = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.ADJUSTMENT,
+        Decimal("10.00"),
+        category="Adjustment",
+    )
+    adjustment_base = {
+        "entry_date": adjustment.entry_date,
+        "category": adjustment.category,
+        "debt_identifier": None,
+        "note": "",
+    }
+    negative = service.correct_actual_entry(
+        plan.id,
+        adjustment.id,
+        amount=Decimal("-5.00"),
+        **adjustment_base,
+    )
+    assert negative.replacement.amount == Decimal("-5.00")
+    with pytest.raises(ValueError, match="nonzero"):
+        service.correct_actual_entry(
+            plan.id,
+            negative.replacement.id,
+            amount=Decimal("0.00"),
+            **adjustment_base,
+        )
+
+
+def test_atomic_correction_rejects_reversal_and_superseded_targets(tmp_path):
+    service = PlanHistoryService(tmp_path / "eligibility.sqlite")
+    _, plan = history_plan_with_forecast(service)
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.SAVINGS_DEPOSIT,
+        Decimal("50.00"),
+        category="Savings",
+    )
+    result = service.correct_actual_entry(
+        plan.id,
+        original.id,
+        entry_date=original.entry_date,
+        amount=Decimal("75.00"),
+        category=original.category,
+        debt_identifier=None,
+        note="Corrected",
+    )
+    replacement = {
+        "entry_date": original.entry_date,
+        "amount": Decimal("80.00"),
+        "category": original.category,
+        "debt_identifier": None,
+        "note": "",
+    }
+
+    with pytest.raises(ValueError, match="already been superseded"):
+        service.correct_actual_entry(plan.id, original.id, **replacement)
+    with pytest.raises(ValueError, match="reversal entry"):
+        service.correct_actual_entry(plan.id, result.reversal.id, **replacement)
+
+
+def test_concurrent_atomic_corrections_allow_only_one_winner(tmp_path):
+    service = PlanHistoryService(tmp_path / "concurrent.sqlite")
+    _, plan = history_plan_with_forecast(service)
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("100.00"),
+        category="Income",
+    )
+
+    def correct(amount):
+        try:
+            return service.correct_actual_entry(
+                plan.id,
+                original.id,
+                entry_date=original.entry_date,
+                amount=amount,
+                category=original.category,
+                debt_identifier=None,
+                note="Concurrent",
+            )
+        except ValueError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(correct, [Decimal("110.00"), Decimal("120.00")])
+        )
+
+    assert sum(not isinstance(result, str) for result in results) == 1
+    assert sum("already been superseded" in result for result in results if isinstance(result, str)) == 1
+    assert len(service.list_actual_entries(plan.id)) == 3
+
+
+def test_correction_chain_survives_json_export_import(tmp_path):
+    service = PlanHistoryService(tmp_path / "export-source.sqlite")
+    _, plan = history_plan_with_forecast(service, "Correction Export")
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("100.00"),
+        category="Income",
+    )
+    first = service.correct_actual_entry(
+        plan.id,
+        original.id,
+        entry_date=original.entry_date,
+        amount=Decimal("110.00"),
+        category="Income",
+        debt_identifier=None,
+        note="First",
+    )
+    service.correct_actual_entry(
+        plan.id,
+        first.replacement.id,
+        entry_date=date(2026, 7, 21),
+        amount=Decimal("120.00"),
+        category="Income",
+        debt_identifier=None,
+        note="Second",
+    )
+
+    export_path = service.export_plan_json(plan.id, tmp_path / "correction.json")
+    imported_service = PlanHistoryService(tmp_path / "export-target.sqlite")
+    imported_plan = imported_service.import_plan_json(export_path)
+    entries = imported_service.list_actual_entries(imported_plan.id)
+
+    assert len(entries) == 5
+    assert [entry.source for entry in entries].count("correction") == 2
+    assert [entry.source for entry in entries].count("correction_replacement") == 2
+    assert (
+        imported_service.compare_forecast_to_actual(imported_plan.id).actual_income
+        == Decimal("120.00")
+    )
+
+
+@pytest.mark.parametrize(
+    ("children", "message"),
+    [
+        (
+            [
+                {
+                    "id": 2,
+                    "entry_type": "income_received",
+                    "entry_date": "2026-07-20",
+                    "amount": "-100.00",
+                    "source": "correction_replacement",
+                    "corrected_entry_id": 1,
+                    "forecast_period_id": None,
+                }
+            ],
+            "one reversal",
+        ),
+        (
+            [
+                {
+                    "id": 2,
+                    "entry_type": "income_received",
+                    "entry_date": "2026-07-20",
+                    "amount": "-99.99",
+                    "source": "correction",
+                    "corrected_entry_id": 1,
+                    "forecast_period_id": None,
+                }
+            ],
+            "reversal amount mismatch",
+        ),
+    ],
+)
+def test_import_rejects_malformed_correction_relationships(
+    tmp_path,
+    children,
+    message,
+):
+    service = PlanHistoryService(tmp_path / "invalid-correction.sqlite")
+    actual_entries = [
+        {
+            "id": 1,
+            "entry_type": "income_received",
+            "entry_date": "2026-07-20",
+            "amount": "100.00",
+            "source": "interactive",
+            "corrected_entry_id": None,
+            "forecast_period_id": None,
+        },
+        *children,
+    ]
+
+    with pytest.raises(ValueError, match=message):
+        service._importer().validate_import_actuals(
+            {"actual_entries": actual_entries, "balance_observations": []},
+            set(),
+        )
 
 
 def test_plan_comparison_reports_tradeoffs_and_first_difference(tmp_path):

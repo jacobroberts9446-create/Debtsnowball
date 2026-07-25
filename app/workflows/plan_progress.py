@@ -28,6 +28,7 @@ from app.workflows.plan_presenter import display_plan_name, format_saved_datetim
 from app.workflows.workbook_export import config_from_plan_version, latest_plan_version
 
 __all__ = [
+    "correct_entry_action",
     "record_adjustment_action",
     "record_bill_payment_action",
     "record_debt_balance_action",
@@ -228,7 +229,7 @@ def run_entry_review_menu(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """Open recent-activity review and safe reversal actions."""
+    """Open recent-activity review, correction, and reversal actions."""
     try:
         current_plan = _current_plan_with_version(service, plan)
     except EXPECTED_SERVICE_ERRORS as exc:
@@ -249,6 +250,16 @@ def run_entry_review_menu(
         ),
         MenuOption(
             "2",
+            "Correct an Entry",
+            lambda: correct_entry_action(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "3",
             "Reverse an Entry",
             lambda: reverse_entry_action(
                 service,
@@ -257,7 +268,7 @@ def run_entry_review_menu(
                 output_func,
             ),
         ),
-        MenuOption("3", "Back", lambda: True),
+        MenuOption("4", "Back", lambda: True),
     ]
     run_menu(
         title="Review Recorded Activity",
@@ -286,11 +297,96 @@ def view_recent_entries_action(
         if not entries:
             print_warning("No recorded activity entries were found.", output_func)
         else:
-            reversed_ids = _reversed_entry_ids(entries)
+            status_context = _entry_status_context(entries)
             for index, entry in enumerate(entries, start=1):
                 output_func(
-                    f"{index}. {_format_actual_entry(entry, reversed_ids)}"
+                    f"{index}. {_format_actual_entry(entry, status_context)}"
                 )
+    wait_for_enter(input_func)
+    return False
+
+
+def correct_entry_action(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Collect a complete replacement and atomically correct one activity."""
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+        all_entries = service.list_actual_entries(current_plan.id)
+        entries = _sort_recent_actual_entries(all_entries)
+        status_context = _entry_status_context(all_entries)
+        selected = _select_actual_entry(
+            entries,
+            input_func,
+            output_func,
+            status_context=status_context,
+        )
+        if selected is None:
+            print_warning("Activity correction cancelled.", output_func)
+            return False
+        _validate_correction_selection(selected, status_context)
+        entry_type = ActualEntryType(str(selected.entry_type))
+
+        output_func("")
+        print_section_header("Current Recorded Activity", output_func)
+        output_func(_format_actual_entry(selected, status_context))
+
+        replacement_date = _prompt_replacement_date(
+            selected.entry_date,
+            input_func,
+            output_func,
+        )
+        replacement_amount = _prompt_replacement_amount(
+            selected.amount,
+            entry_type,
+            input_func,
+            output_func,
+        )
+        category, debt_identifier = _prompt_replacement_association(
+            service,
+            current_plan,
+            selected,
+            entry_type,
+            input_func,
+            output_func,
+        )
+        note = _prompt_replacement_note(selected.note, input_func)
+
+        output_func("")
+        print_section_header("Corrected Recorded Activity", output_func)
+        output_func(f"Date: {replacement_date:%m/%d/%Y}")
+        output_func(f"Amount: {format_currency(replacement_amount)}")
+        if debt_identifier:
+            output_func(f"Debt: {debt_identifier}")
+        elif category:
+            output_func(f"Category: {category}")
+        output_func(f"Note: {note or 'None'}")
+        confirmation = input_func("Type CORRECT to confirm: ").strip()
+        if confirmation != "CORRECT":
+            print_warning("Activity correction cancelled.", output_func)
+            return False
+
+        service.correct_actual_entry(
+            current_plan.id,
+            selected.id,
+            entry_date=replacement_date,
+            amount=replacement_amount,
+            category=category,
+            debt_identifier=debt_identifier,
+            note=note,
+        )
+    except _ActivityCancelled:
+        print_warning("Activity correction cancelled.", output_func)
+        return False
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    print_success("Recorded activity corrected successfully.", output_func)
     wait_for_enter(input_func)
     return False
 
@@ -304,15 +400,21 @@ def reverse_entry_action(
     """Select and explicitly confirm one eligible activity reversal."""
     try:
         current_plan = _current_plan_with_version(service, plan)
-        entries = _recent_actual_entries(service, current_plan)
-        selected = _select_actual_entry(entries, input_func, output_func)
+        all_entries = service.list_actual_entries(current_plan.id)
+        entries = _sort_recent_actual_entries(all_entries)
+        status_context = _entry_status_context(all_entries)
+        selected = _select_actual_entry(
+            entries,
+            input_func,
+            output_func,
+            status_context=status_context,
+        )
         if selected is None:
             print_warning("Activity reversal cancelled.", output_func)
             return False
-        reversed_ids = _reversed_entry_ids(entries)
-        _validate_reversal_selection(selected, reversed_ids)
+        _validate_reversal_selection(selected, status_context)
         output_func("")
-        output_func(f"Selected: {_format_actual_entry(selected, reversed_ids)}")
+        output_func(f"Selected: {_format_actual_entry(selected, status_context)}")
         output_func(
             "Reversal preserves the original entry and adds an equal opposite entry."
         )
@@ -666,7 +768,11 @@ def _recent_actual_entries(
     plan: Any,
 ) -> list[Any]:
     """Return the most recent actual entries for the selected plan."""
-    entries = service.list_actual_entries(plan.id)
+    return _sort_recent_actual_entries(service.list_actual_entries(plan.id))
+
+
+def _sort_recent_actual_entries(entries: list[Any]) -> list[Any]:
+    """Sort and bound an already-loaded actual-entry collection."""
     return sorted(
         entries,
         key=lambda entry: (entry.entry_date, entry.id),
@@ -674,30 +780,33 @@ def _recent_actual_entries(
     )[:RECENT_ENTRY_LIMIT]
 
 
-def _reversed_entry_ids(entries: list[Any]) -> set[int]:
-    """Return original entry identifiers referenced by visible reversals."""
-    return {
-        entry.corrected_entry_id
-        for entry in entries
-        if entry.corrected_entry_id is not None
-    }
+def _entry_status_context(entries: list[Any]) -> dict[int, set[str]]:
+    """Map each superseded entry to the source labels of its audit children."""
+    context: dict[int, set[str]] = {}
+    for entry in entries:
+        target_id = entry.corrected_entry_id
+        if target_id is not None:
+            context.setdefault(target_id, set()).add(entry.source)
+    return context
 
 
 def _select_actual_entry(
     entries: list[Any],
     input_func: InputFunc,
     output_func: OutputFunc,
+    *,
+    status_context: dict[int, set[str]] | None = None,
 ) -> Any | None:
     """Select recent actual activity by display number."""
     if not entries:
         print_warning("No recorded activity entries were found.", output_func)
         return None
 
-    reversed_ids = _reversed_entry_ids(entries)
+    status_context = status_context or _entry_status_context(entries)
     output_func("")
     print_section_header("Select Recorded Activity", output_func)
     for index, entry in enumerate(entries, start=1):
-        output_func(f"{index}. {_format_actual_entry(entry, reversed_ids)}")
+        output_func(f"{index}. {_format_actual_entry(entry, status_context)}")
     cancel_key = str(len(entries) + 1)
     output_func(f"{cancel_key}. Cancel")
     while True:
@@ -716,15 +825,38 @@ def _select_actual_entry(
         )
 
 
-def _validate_reversal_selection(entry: Any, reversed_ids: set[int]) -> None:
+def _validate_reversal_selection(
+    entry: Any,
+    status_context: dict[int, set[str]],
+) -> None:
     """Reject reversal entries and originals already neutralized."""
-    if entry.corrected_entry_id is not None:
+    if entry.source == "correction" or (
+        entry.corrected_entry_id is not None
+        and entry.source != "correction_replacement"
+    ):
         raise ValueError("A reversal entry cannot be reversed.")
-    if entry.id in reversed_ids:
+    if entry.id in status_context:
         raise ValueError("That recorded activity has already been reversed.")
 
 
-def _format_actual_entry(entry: Any, reversed_ids: set[int]) -> str:
+def _validate_correction_selection(
+    entry: Any,
+    status_context: dict[int, set[str]],
+) -> None:
+    """Reject reversal entries and activity already superseded."""
+    if entry.source == "correction" or (
+        entry.corrected_entry_id is not None
+        and entry.source != "correction_replacement"
+    ):
+        raise ValueError("A reversal entry cannot be corrected.")
+    if entry.id in status_context:
+        raise ValueError("That recorded activity has already been corrected or reversed.")
+
+
+def _format_actual_entry(
+    entry: Any,
+    status_context: dict[int, set[str]],
+) -> str:
     """Format one actual entry using only user-facing values."""
     entry_type = ActualEntryType(str(entry.entry_type))
     label = ACTIVITY_TYPE_LABELS.get(
@@ -738,10 +870,17 @@ def _format_actual_entry(entry: Any, reversed_ids: set[int]) -> str:
     details.append(format_currency(entry.amount))
     if entry.note:
         details.append(f"Note: {entry.note}")
-    if entry.corrected_entry_id is not None:
+    if entry.source == "correction":
         details.append("Reversal")
-    elif entry.id in reversed_ids:
+    elif entry.source == "correction_replacement":
+        status = "Corrected" if entry.id in status_context else "Current"
+        details.append(f"Corrected Entry ({status})")
+    elif "correction_replacement" in status_context.get(entry.id, set()):
+        details.append("Corrected Original")
+    elif entry.id in status_context:
         details.append("Reversed")
+    else:
+        details.append("Current")
     return " - ".join(details)
 
 
@@ -967,6 +1106,149 @@ def _prompt_activity_date(
             return parse_first_paycheck_date(raw_value)
         except ValueError:
             print_warning("Enter a valid date in MM/DD/YYYY format.", output_func)
+
+
+def _prompt_replacement_date(
+    current: date,
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> date:
+    """Prompt for a replacement date while retaining the current value on blank."""
+    while True:
+        raw_value = input_func(
+            f"Activity date [{current:%m/%d/%Y}] (or 'cancel'): "
+        ).strip()
+        _raise_if_cancelled(raw_value)
+        if not raw_value:
+            return current
+        try:
+            return parse_first_paycheck_date(raw_value)
+        except ValueError:
+            print_warning("Enter a valid date in MM/DD/YYYY format.", output_func)
+
+
+def _prompt_replacement_amount(
+    current: Decimal,
+    entry_type: ActualEntryType,
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> Decimal:
+    """Prompt for a replacement amount while preserving existing sign rules."""
+    allow_negative = entry_type == ActualEntryType.ADJUSTMENT
+    while True:
+        raw_value = input_func(
+            f"Amount in USD [{current:.2f}] (or 'cancel'): "
+        ).strip()
+        _raise_if_cancelled(raw_value)
+        if not raw_value:
+            return current
+        try:
+            amount = (
+                money(raw_value.replace("$", "").replace(",", ""))
+                if allow_negative
+                else parse_nonnegative_money(raw_value)
+            )
+        except ValueError:
+            amount = Decimal("0.00")
+        if allow_negative and amount != Decimal("0.00"):
+            return amount
+        if not allow_negative and amount > Decimal("0.00"):
+            return amount
+        print_warning(
+            "Enter a nonzero positive or negative amount."
+            if allow_negative
+            else "Enter an amount greater than $0.00.",
+            output_func,
+        )
+
+
+def _prompt_replacement_association(
+    service: PlanHistoryService,
+    plan: Any,
+    entry: Any,
+    entry_type: ActualEntryType,
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> tuple[str, str | None]:
+    """Retain or replace the user-facing bill/debt association."""
+    if entry_type not in {ActualEntryType.BILL_PAID, ActualEntryType.DEBT_PAYMENT}:
+        raw_category = input_func(
+            f"Category [{entry.category or 'None'}] (or 'cancel'): "
+        ).strip()
+        _raise_if_cancelled(raw_category)
+        return raw_category or entry.category, None
+
+    config = _latest_plan_config(service, plan)
+    entity_kind = "bill" if entry_type == ActualEntryType.BILL_PAID else "debt"
+    entities = config.bills if entity_kind == "bill" else config.debts
+    current_name = (
+        entry.category if entity_kind == "bill" else entry.debt_identifier
+    )
+    selected_name = _select_named_entity_with_default(
+        entities,
+        entity_kind,
+        current_name,
+        input_func,
+        output_func,
+    )
+    if entity_kind == "bill":
+        return selected_name, None
+    return entry.category, selected_name
+
+
+def _select_named_entity_with_default(
+    entities: list[Any],
+    entity_kind: str,
+    current_name: str,
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> str:
+    """Select a saved bill/debt by number, with blank retaining the current name."""
+    names = []
+    for entity in entities:
+        name = getattr(entity, "name", None)
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                f"The latest saved plan contains a {entity_kind} "
+                "without a usable name."
+            )
+        names.append(name.strip())
+    if not names:
+        raise ValueError(f"No {entity_kind}s are available for this plan.")
+
+    output_func("")
+    print_section_header(f"Select {entity_kind.title()}", output_func)
+    for index, name in enumerate(names, start=1):
+        output_func(f"{index}. {name}")
+    while True:
+        choice = input_func(
+            f"Choose an option [Enter to keep {current_name}] (or 'cancel'): "
+        ).strip()
+        _raise_if_cancelled(choice)
+        if not choice:
+            if current_name:
+                return current_name
+            print_warning(f"Choose a {entity_kind}.", output_func)
+            continue
+        try:
+            selected_index = int(choice)
+        except ValueError:
+            selected_index = 0
+        if 1 <= selected_index <= len(names):
+            return names[selected_index - 1]
+        print_warning(
+            f"Please choose one of: {', '.join(str(index) for index in range(1, len(names) + 1))}.",
+            output_func,
+        )
+
+
+def _prompt_replacement_note(current: str, input_func: InputFunc) -> str:
+    """Prompt for a replacement note, retaining the current value on blank."""
+    raw_value = input_func(
+        f"Note [{current or 'None'}] (Enter to keep, or 'cancel'): "
+    ).strip()
+    _raise_if_cancelled(raw_value)
+    return raw_value or current
 
 
 def _prompt_balance_date(

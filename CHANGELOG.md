@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
   personal spending, and adjustments
 - Interactive recording of current debt and savings balances
 - Safe interactive reversal of recorded activity with immutable audit history
+- Atomic activity correction with linked reversal and replacement entries
 
 ## [1.1.0] - Unreleased
 

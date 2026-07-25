@@ -767,14 +767,18 @@ class PlanHistoryImporter:
         """Validate actual-entry import relationships."""
         actual_ids = set()
         actual_types = {}
+        actual_sources = {}
+        actual_amounts = {}
+        correction_targets = {}
         for row in payload.get("actual_entries", []):
             row_id = int(row["id"])
             if row_id in actual_ids:
                 raise ValueError("actual_entries contain duplicate identifiers.")
             actual_ids.add(row_id)
             actual_types[row_id] = ActualEntryType(row["entry_type"])
+            actual_sources[row_id] = str(row.get("source", "import"))
+            actual_amounts[row_id] = to_cents(row["amount"])
             date.fromisoformat(row["entry_date"])
-            to_cents(row["amount"])
             period_id = row.get("forecast_period_id")
             if period_id is not None and int(period_id) not in period_ids:
                 raise ValueError("actual_entries contain an orphan forecast_period_id.")
@@ -786,6 +790,20 @@ class PlanHistoryImporter:
                     raise ValueError("actual_entries contain an invalid reversal reference.")
                 if actual_types[int(row["id"])] != actual_types[corrected_id]:
                     raise ValueError("actual_entries reversal type mismatch.")
+                source = actual_sources[int(row["id"])]
+                if source not in {"correction", "correction_replacement"}:
+                    raise ValueError("actual_entries contain an invalid correction source.")
+                correction_targets[int(row["id"])] = corrected_id
+            elif actual_sources[int(row["id"])] in {
+                "correction",
+                "correction_replacement",
+            }:
+                raise ValueError("actual_entries contain an unlinked correction row.")
+        PlanHistoryImporter._validate_correction_relationships(
+            actual_sources,
+            actual_amounts,
+            correction_targets,
+        )
         for row in payload.get("balance_observations", []):
             ActualEntryType(row["observation_type"])
             date.fromisoformat(row["observation_date"])
@@ -793,3 +811,50 @@ class PlanHistoryImporter:
             period_id = row.get("forecast_period_id")
             if period_id is not None and int(period_id) not in period_ids:
                 raise ValueError("balance_observations contain an orphan forecast_period_id.")
+
+    @staticmethod
+    def _validate_correction_relationships(
+        actual_sources: dict[int, str],
+        actual_amounts: dict[int, int],
+        correction_targets: dict[int, int],
+    ) -> None:
+        """Validate reversal pairs and acyclic correction replacement chains."""
+        children_by_target: dict[int, list[int]] = {}
+        for child_id, target_id in correction_targets.items():
+            children_by_target.setdefault(target_id, []).append(child_id)
+
+        for target_id, child_ids in children_by_target.items():
+            if actual_sources[target_id] == "correction":
+                raise ValueError("actual_entries cannot correct a reversal row.")
+            child_sources = [actual_sources[child_id] for child_id in child_ids]
+            if child_sources.count("correction") != 1:
+                raise ValueError(
+                    "actual_entries correction target must have one reversal."
+                )
+            if child_sources.count("correction_replacement") > 1 or len(child_ids) > 2:
+                raise ValueError("actual_entries contain duplicate correction children.")
+            if (
+                "correction_replacement" in child_sources
+                and len(child_sources) != 2
+            ):
+                raise ValueError(
+                    "actual_entries correction replacement requires a reversal."
+                )
+            reversal_id = next(
+                child_id
+                for child_id in child_ids
+                if actual_sources[child_id] == "correction"
+            )
+            if actual_amounts[reversal_id] != -actual_amounts[target_id]:
+                raise ValueError(
+                    "actual_entries correction reversal amount mismatch."
+                )
+
+        for child_id in correction_targets:
+            visited = set()
+            current = child_id
+            while current in correction_targets:
+                if current in visited:
+                    raise ValueError("actual_entries contain a correction cycle.")
+                visited.add(current)
+                current = correction_targets[current]

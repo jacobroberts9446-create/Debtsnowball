@@ -21,6 +21,7 @@ from app.history.importer import PlanHistoryImporter
 from app.history.repository import HistoryRepository
 from app.money import money, to_cents
 from app.models import (
+    ActualEntryCorrectionResult,
     ActualEntryType,
     ActualTransaction,
     AssumptionDifference,
@@ -591,7 +592,7 @@ class PlanHistoryService:
                 row = conn.execute(
                     """
                     SELECT plan_id, entry_date, entry_type, debt_identifier, amount,
-                           category, description, corrected_entry_id,
+                           category, description, source, corrected_entry_id,
                            forecast_period_id, match_method, matched_at
                     FROM actual_transactions
                     WHERE id = ?
@@ -606,7 +607,7 @@ class PlanHistoryService:
                     raise ValueError(
                         "recorded activity does not belong to the selected plan."
                     )
-                if row[7] is not None:
+                if row[8] is not None and row[7] != "correction_replacement":
                     raise ValueError("a reversal entry cannot be reversed.")
                 if conn.execute(
                     """
@@ -641,9 +642,9 @@ class PlanHistoryService:
                         utc_timestamp(),
                         entry_id,
                         note,
-                        row[8],
                         row[9],
                         row[10],
+                        row[11],
                     ),
                 )
                 reversal_id = int(cursor.lastrowid)
@@ -652,6 +653,272 @@ class PlanHistoryService:
                 conn.rollback()
                 raise
         return self.get_actual_entry(reversal_id)
+
+    def correct_actual_entry(
+        self,
+        plan_id: int,
+        entry_id: int,
+        *,
+        entry_date: date,
+        amount: Decimal,
+        category: str,
+        debt_identifier: str | None,
+        note: str,
+    ) -> ActualEntryCorrectionResult:
+        """Atomically reverse an activity and append its complete replacement."""
+        with closing(self.database._connect()) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                replacement = self._validate_actual_replacement(
+                    entry_date=entry_date,
+                    amount=amount,
+                    category=category,
+                    debt_identifier=debt_identifier,
+                    note=note,
+                )
+                row = conn.execute(
+                    """
+                    SELECT plan_id, entry_date, entry_type, debt_identifier, amount,
+                           category, description, source, corrected_entry_id,
+                           forecast_period_id, match_method, matched_at
+                    FROM actual_transactions
+                    WHERE id = ?
+                    """,
+                    (entry_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("recorded activity was not found.")
+                if int(row[0]) != plan_id:
+                    raise ValueError(
+                        "recorded activity does not belong to the selected plan."
+                    )
+
+                entry_type = ActualEntryType(row[2])
+                self._validate_correction_target(
+                    conn,
+                    entry_id=entry_id,
+                    entry_type=entry_type,
+                    source=row[7],
+                    corrected_entry_id=row[8],
+                )
+                self._validate_actual_association(
+                    entry_type,
+                    replacement["category"],
+                    replacement["debt_identifier"],
+                )
+                self._validate_actual_amount(entry_type, replacement["amount"])
+                period_id, match_method = self._match_period_in_connection(
+                    conn,
+                    plan_id,
+                    replacement["entry_date"],
+                )
+                timestamp = utc_timestamp()
+                reversal_cursor = conn.execute(
+                    """
+                    INSERT INTO actual_transactions (
+                        plan_id, entry_date, entry_type, debt_identifier, amount,
+                        category, description, source, created_at,
+                        corrected_entry_id, note, forecast_period_id,
+                        match_method, matched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        plan_id,
+                        row[1],
+                        row[2],
+                        row[3],
+                        -int(row[4]),
+                        row[5],
+                        f"Reversal: {row[6]}",
+                        "correction",
+                        timestamp,
+                        entry_id,
+                        "Reversed by atomic correction",
+                        row[9],
+                        row[10],
+                        row[11],
+                    ),
+                )
+                replacement_cursor = conn.execute(
+                    """
+                    INSERT INTO actual_transactions (
+                        plan_id, entry_date, entry_type, debt_identifier, amount,
+                        category, description, source, created_at,
+                        corrected_entry_id, note, forecast_period_id,
+                        match_method, matched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        plan_id,
+                        replacement["entry_date"].isoformat(),
+                        entry_type.value,
+                        replacement["debt_identifier"],
+                        to_cents(replacement["amount"]),
+                        replacement["category"],
+                        row[6],
+                        "correction_replacement",
+                        timestamp,
+                        entry_id,
+                        replacement["note"],
+                        period_id,
+                        match_method,
+                        timestamp if period_id is not None else None,
+                    ),
+                )
+                reversal_id = int(reversal_cursor.lastrowid)
+                replacement_id = int(replacement_cursor.lastrowid)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        return ActualEntryCorrectionResult(
+            original=self.get_actual_entry(entry_id),
+            reversal=self.get_actual_entry(reversal_id),
+            replacement=self.get_actual_entry(replacement_id),
+        )
+
+    @staticmethod
+    def _validate_actual_replacement(
+        *,
+        entry_date: date,
+        amount: Decimal,
+        category: str,
+        debt_identifier: str | None,
+        note: str,
+    ) -> dict[str, Any]:
+        """Normalize complete replacement fields before opening a transaction."""
+        if not isinstance(entry_date, date):
+            raise ValueError("replacement date must be a date.")
+        if not isinstance(category, str):
+            raise ValueError("replacement category must be text.")
+        if debt_identifier is not None and not isinstance(debt_identifier, str):
+            raise ValueError("replacement debt name must be text.")
+        if not isinstance(note, str):
+            raise ValueError("replacement note must be text.")
+        return {
+            "entry_date": entry_date,
+            "amount": money(amount),
+            "category": category.strip(),
+            "debt_identifier": None
+            if debt_identifier is None
+            else debt_identifier.strip() or None,
+            "note": note.strip(),
+        }
+
+    @staticmethod
+    def _validate_correction_target(
+        conn: sqlite3.Connection,
+        *,
+        entry_id: int,
+        entry_type: ActualEntryType,
+        source: str,
+        corrected_entry_id: int | None,
+    ) -> None:
+        """Reject non-activity, reversal, and superseded correction targets."""
+        if entry_type in {
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+        }:
+            raise ValueError("balance observations cannot be corrected as activity.")
+        if source == "correction" or (
+            corrected_entry_id is not None
+            and source != "correction_replacement"
+        ):
+            raise ValueError("a reversal entry cannot be corrected.")
+        if conn.execute(
+            """
+            SELECT 1
+            FROM actual_transactions
+            WHERE corrected_entry_id = ?
+            LIMIT 1
+            """,
+            (entry_id,),
+        ).fetchone() is not None:
+            raise ValueError("recorded activity has already been superseded.")
+
+    @staticmethod
+    def _validate_actual_association(
+        entry_type: ActualEntryType,
+        category: str,
+        debt_identifier: str | None,
+    ) -> None:
+        """Validate bill/debt associations for a complete replacement."""
+        if entry_type == ActualEntryType.BILL_PAID:
+            if not category:
+                raise ValueError("bill payment requires a bill name.")
+            if debt_identifier is not None:
+                raise ValueError("bill payment cannot use a debt name.")
+            return
+        if entry_type == ActualEntryType.DEBT_PAYMENT:
+            if debt_identifier is None:
+                raise ValueError("debt payment requires a debt name.")
+            return
+        if debt_identifier is not None:
+            raise ValueError("only debt payments may use a debt name.")
+
+    @staticmethod
+    def _validate_actual_amount(
+        entry_type: ActualEntryType,
+        amount: Decimal,
+    ) -> None:
+        """Apply existing interactive sign rules to a replacement amount."""
+        if entry_type == ActualEntryType.ADJUSTMENT:
+            if amount == Decimal("0.00"):
+                raise ValueError("adjustment amount must be nonzero.")
+            return
+        if amount <= Decimal("0.00"):
+            raise ValueError("replacement amount must be greater than $0.00.")
+
+    @staticmethod
+    def _match_period_in_connection(
+        conn: sqlite3.Connection,
+        plan_id: int,
+        value: date,
+    ) -> tuple[int | None, str]:
+        """Match a date to the current forecast using an existing transaction."""
+        plan_row = conn.execute(
+            "SELECT current_version_id FROM plans WHERE id = ?",
+            (plan_id,),
+        ).fetchone()
+        if plan_row is None:
+            raise ValueError("selected plan was not found.")
+        if plan_row[0] is None:
+            return None, "unmatched"
+        snapshot_row = conn.execute(
+            """
+            SELECT id
+            FROM forecast_snapshots
+            WHERE plan_version_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (plan_row[0],),
+        ).fetchone()
+        if snapshot_row is None:
+            return None, "unmatched"
+        rows = conn.execute(
+            """
+            SELECT id, pay_date
+            FROM forecast_periods
+            WHERE forecast_snapshot_id = ?
+            ORDER BY sequence_number
+            """,
+            (snapshot_row[0],),
+        ).fetchall()
+        for index, row in enumerate(rows):
+            start_date = date.fromisoformat(row[1])
+            next_start = (
+                date.fromisoformat(rows[index + 1][1])
+                if index + 1 < len(rows)
+                else date.max
+            )
+            if start_date <= value < next_start:
+                return int(row[0]), "date_window"
+        return None, "unmatched"
 
     def add_balance_observation(
         self,

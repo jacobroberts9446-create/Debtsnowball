@@ -576,10 +576,13 @@ Use `Record Balance` under `Track Progress` to record a current debt balance by
 debt name or the plan's current savings balance. Balance observations are kept
 separate from payments and deposits.
 
-Use `Review Recorded Activity` to inspect recent transactions and reverse an
-incorrect entry. Reversal requires typing `REVERSE` and preserves both the
-original entry and its offsetting audit entry. Balance observations cannot be
-reversed from this workflow.
+Use `Review Recorded Activity` to inspect, correct, or reverse a recent
+transaction. Correction requires typing `CORRECT` and atomically adds both an
+offsetting reversal and a complete replacement; blank correction fields retain
+their current values. Reversal requires typing `REVERSE` and preserves both the
+original entry and its offsetting audit entry. Corrected replacements can be
+corrected or reversed later, preserving the complete chain. Balance
+observations cannot be corrected or reversed from this workflow.
 
 Optional history features include:
 
@@ -588,7 +591,7 @@ Optional history features include:
 - SHA-256 configuration and forecast fingerprints.
 - Forecast snapshots with period, debt, and savings detail.
 - Actual activity entries kept separate from forecast assumptions.
-- Reversal entries for corrections, preserving an audit trail.
+- Atomic activity corrections and reversals that preserve the audit trail.
 - Neutral plan comparison and forecast-versus-actual status labels.
 - Portable JSON export and CSV forecast-period export.
 
