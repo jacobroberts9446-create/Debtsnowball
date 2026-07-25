@@ -721,17 +721,5 @@ def save_current_plan(
     return "created", plan
 
 
-def _missing_history_action(
-    _service: PlanHistoryService,
-    _preferences: RecentPlanPreferences,
-    _plan,
-    input_func: InputFunc,
-    output_func: OutputFunc,
-) -> bool:
-    print_error("saved plan history is not configured.", output_func)
-    wait_for_enter(input_func)
-    return False
-
-
 def _missing_config_loader() -> Config:
     raise ValueError("saved plan config loading is not configured.")

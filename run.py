@@ -1,8 +1,4 @@
-"""
-run.py
-
-DebtSnowball
-"""
+"""DebtSnowball application composition root."""
 
 from decimal import Decimal
 from typing import Callable
@@ -146,23 +142,11 @@ def run_create_new_plan_action(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """Run interactive setup for the create-plan milestone."""
+    """Run interactive plan setup and display its generated results."""
     result = plan_setup_func(input_func=input_func, output_func=output_func)
     if result is not None:
         results_viewer_func(result, input_func=input_func, output_func=output_func)
         output_func("Returned from plan results.")
-    return False
-
-
-def show_placeholder_screen(
-    message: str,
-    input_func: InputFunc = input,
-    output_func: OutputFunc = print,
-) -> bool:
-    """Show a future-feature message before returning to the main menu."""
-    output_func("")
-    output_func(message)
-    wait_for_enter(input_func)
     return False
 
 

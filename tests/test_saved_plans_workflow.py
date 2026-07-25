@@ -1061,23 +1061,11 @@ def test_save_current_plan_helper_creates_and_versions() -> None:
     assert service.saved_versions[-1].force is True
 
 
-def test_formatting_fallbacks_and_missing_history_action() -> None:
-    """Small presentation and fallback helpers remain deterministic."""
-    output = []
-
-    result = saved_plans._missing_history_action(
-        FakePlanHistoryService(),
-        FakePreferences(),
-        plan_stub(),
-        input_func=lambda _prompt: "",
-        output_func=output.append,
-    )
-
-    assert result is False
+def test_formatting_fallbacks() -> None:
+    """Small presentation helpers remain deterministic."""
     assert saved_plans.display_plan_name(SimpleNamespace(name="   ")) == "Untitled Plan"
     assert saved_plans.version_count_label(FakePlanHistoryService(), plan_stub()) == "Unknown"
     assert saved_plans.format_saved_datetime("not-a-date") == "not-a-date"
-    assert "Error: saved plan history is not configured." in output
 
 
 def test_missing_config_loader_raises_clear_error() -> None:
