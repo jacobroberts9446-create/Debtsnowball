@@ -261,6 +261,88 @@ def test_actual_entries_reverse_and_compare_without_moralizing(tmp_path):
     assert service.list_actual_entries(plan.id) == entries
 
 
+@pytest.mark.parametrize(
+    ("adjustment", "expected_remaining"),
+    [
+        (Decimal("12.34"), Decimal("12.34")),
+        (Decimal("-4.56"), Decimal("-4.56")),
+    ],
+)
+def test_aggregate_signed_adjustments_change_remaining_cash(
+    tmp_path,
+    adjustment,
+    expected_remaining,
+):
+    service = PlanHistoryService(tmp_path / "adjustment-summary.sqlite")
+    config = Config().load("config.json")
+    plan = service.create_plan("Adjustment Summary", config)
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.ADJUSTMENT,
+        adjustment,
+    )
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert comparison.actual_remaining_cash == expected_remaining
+
+
+def test_aggregate_savings_withdrawal_reduces_net_savings_and_releases_cash(tmp_path):
+    service = PlanHistoryService(tmp_path / "withdrawal-summary.sqlite")
+    config = Config().load("config.json")
+    plan = service.create_plan("Withdrawal Summary", config)
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.SAVINGS_DEPOSIT,
+        Decimal("100.05"),
+    )
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.SAVINGS_WITHDRAWAL,
+        Decimal("40.02"),
+    )
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert comparison.actual_savings == Decimal("60.03")
+    assert comparison.actual_remaining_cash == Decimal("-60.03")
+
+
+def test_aggregate_mixed_activity_uses_exact_decimal_cash_flow(tmp_path):
+    service = PlanHistoryService(tmp_path / "mixed-summary.sqlite")
+    config = Config().load("config.json")
+    plan = service.create_plan("Mixed Summary", config)
+    activity = [
+        (ActualEntryType.INCOME_RECEIVED, Decimal("2000.10")),
+        (ActualEntryType.BILL_PAID, Decimal("500.05")),
+        (ActualEntryType.DEBT_PAYMENT, Decimal("300.01")),
+        (ActualEntryType.SAVINGS_DEPOSIT, Decimal("200.02")),
+        (ActualEntryType.SAVINGS_WITHDRAWAL, Decimal("50.03")),
+        (ActualEntryType.PERSONAL_SPENDING, Decimal("100.04")),
+        (ActualEntryType.ADJUSTMENT, Decimal("10.05")),
+        (ActualEntryType.ADJUSTMENT, Decimal("-2.06")),
+    ]
+    for entry_type, amount in activity:
+        service.add_actual_entry(
+            plan.id,
+            config.settings.first_paycheck,
+            entry_type,
+            amount,
+        )
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert comparison.actual_income == Decimal("2000.10")
+    assert comparison.actual_bills == Decimal("500.05")
+    assert comparison.actual_debt_payments == Decimal("300.01")
+    assert comparison.actual_savings == Decimal("149.99")
+    assert comparison.actual_personal_spending == Decimal("100.04")
+    assert comparison.actual_remaining_cash == Decimal("958.00")
+
+
 def test_atomic_actual_correction_preserves_rows_periods_and_totals(tmp_path):
     service = PlanHistoryService(tmp_path / "correction.sqlite")
     _, plan = history_plan_with_forecast(service)
@@ -1067,6 +1149,38 @@ def test_period_comparison_reports_complete_on_track_actuals(tmp_path):
     assert complete_period.interpretation == (
         "Recorded activity is close to the forecast for this period."
     )
+
+
+def test_period_comparison_includes_withdrawals_and_signed_adjustments(tmp_path):
+    service = PlanHistoryService(tmp_path / "period-cash-flow.sqlite")
+    config, plan = history_plan_with_forecast(service, "Period Cash Flow")
+    activity = [
+        (ActualEntryType.INCOME_RECEIVED, Decimal("1000.00")),
+        (ActualEntryType.BILL_PAID, Decimal("100.00")),
+        (ActualEntryType.DEBT_PAYMENT, Decimal("200.00")),
+        (ActualEntryType.SAVINGS_DEPOSIT, Decimal("300.00")),
+        (ActualEntryType.SAVINGS_WITHDRAWAL, Decimal("50.00")),
+        (ActualEntryType.PERSONAL_SPENDING, Decimal("100.00")),
+        (ActualEntryType.ADJUSTMENT, Decimal("25.25")),
+        (ActualEntryType.ADJUSTMENT, Decimal("-5.05")),
+    ]
+    for entry_type, amount in activity:
+        service.add_actual_entry(
+            plan.id,
+            config.settings.first_paycheck,
+            entry_type,
+            amount,
+        )
+
+    comparison = service.compare_forecast_to_actual_periods(plan.id)[0]
+
+    assert comparison.actual_income == Decimal("1000.00")
+    assert comparison.actual_bills == Decimal("100.00")
+    assert comparison.actual_debt_payments == Decimal("200.00")
+    assert comparison.actual_savings_deposit == Decimal("300.00")
+    assert comparison.actual_savings_withdrawal == Decimal("50.00")
+    assert comparison.actual_personal_spending == Decimal("100.00")
+    assert comparison.actual_remaining_cash == Decimal("370.20")
 
 
 def test_persisted_forecast_detail_reconciles_exactly(tmp_path):

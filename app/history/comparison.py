@@ -42,6 +42,7 @@ class HistoryComparisonService:
             - actual["debt"]
             - actual["savings"]
             - actual["personal"]
+            + actual["adjustment"]
         )
         status = "Insufficient actual data"
         if any(value != Decimal("0.00") for value in actual.values()):
@@ -99,6 +100,7 @@ class HistoryComparisonService:
             actual_savings = actual.get(ActualEntryType.SAVINGS_DEPOSIT)
             actual_withdrawal = actual.get(ActualEntryType.SAVINGS_WITHDRAWAL)
             actual_personal = actual.get(ActualEntryType.PERSONAL_SPENDING)
+            actual_adjustment = actual.get(ActualEntryType.ADJUSTMENT)
             actual_remaining = self.actual_remaining(
                 actual_income,
                 actual_bills,
@@ -106,6 +108,7 @@ class HistoryComparisonService:
                 actual_savings,
                 actual_personal,
                 actual_withdrawal,
+                actual_adjustment,
             )
             status = self.period_status(actual, actual_remaining, planned_remaining)
             comparisons.append(
@@ -363,13 +366,14 @@ class HistoryComparisonService:
                 totals["bills"] += entry.amount
             elif entry.entry_type == ActualEntryType.DEBT_PAYMENT:
                 totals["debt"] += entry.amount
-            elif entry.entry_type in {
-                ActualEntryType.SAVINGS_DEPOSIT,
-                ActualEntryType.SAVINGS_WITHDRAWAL,
-            }:
+            elif entry.entry_type == ActualEntryType.SAVINGS_DEPOSIT:
                 totals["savings"] += entry.amount
+            elif entry.entry_type == ActualEntryType.SAVINGS_WITHDRAWAL:
+                totals["savings"] -= entry.amount
             elif entry.entry_type == ActualEntryType.PERSONAL_SPENDING:
                 totals["personal"] += entry.amount
+            elif entry.entry_type == ActualEntryType.ADJUSTMENT:
+                totals["adjustment"] += entry.amount
         return {key: money(value) for key, value in totals.items()}
 
     def actual_totals_by_period(
@@ -460,6 +464,7 @@ class HistoryComparisonService:
         savings: Decimal | None,
         personal: Decimal | None,
         withdrawal: Decimal | None,
+        adjustment: Decimal | None,
     ) -> Decimal | None:
         """Calculate remaining cash from actual entries."""
         values = [income, bills, debt, savings, personal]
@@ -472,6 +477,7 @@ class HistoryComparisonService:
             - savings
             - personal
             + (withdrawal or Decimal("0.00"))
+            + (adjustment or Decimal("0.00"))
         )
 
     @staticmethod
@@ -624,4 +630,5 @@ def zero_actual_totals() -> dict[str, Decimal]:
         "debt": Decimal("0.00"),
         "savings": Decimal("0.00"),
         "personal": Decimal("0.00"),
+        "adjustment": Decimal("0.00"),
     }

@@ -1,6 +1,7 @@
 """Tests for interactive plan progress and activity workflows."""
 
 import json
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -417,6 +418,30 @@ def test_forecast_vs_actual_displays_existing_comparison_values() -> None:
     assert "$200.00" in text
     assert "$100.00" in text
     assert "732" not in text
+
+
+def test_forecast_vs_actual_displays_net_savings_and_adjusted_remaining_cash() -> None:
+    """Aggregate corrected values are presented without recalculation."""
+    service = FakeProgressService()
+    service.comparison = replace(
+        comparison(),
+        actual_savings=Decimal("149.99"),
+        actual_remaining_cash=Decimal("958.00"),
+    )
+    output = []
+
+    plan_progress.show_forecast_vs_actual(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "Savings" in text
+    assert "$149.99" in text
+    assert "Remaining cash" in text
+    assert "$958.00" in text
 
 
 def test_forecast_vs_actual_explains_when_no_progress_exists() -> None:
