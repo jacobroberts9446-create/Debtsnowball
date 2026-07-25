@@ -664,6 +664,20 @@ class PlanComparison:
 
 
 @dataclass(frozen=True)
+class ActualDataCompleteness:
+    """Applicable, recorded, and missing actual-activity categories."""
+
+    expected_categories: tuple[ActualEntryType, ...] = ()
+    recorded_categories: tuple[ActualEntryType, ...] = ()
+    missing_categories: tuple[ActualEntryType, ...] = ()
+
+    @property
+    def is_complete(self) -> bool:
+        """Return whether every applicable category has been recorded."""
+        return not self.missing_categories
+
+
+@dataclass(frozen=True)
 class ForecastActualComparison:
     """Planned-versus-actual totals for a plan period."""
 
@@ -680,6 +694,9 @@ class ForecastActualComparison:
     planned_remaining_cash: Decimal
     actual_remaining_cash: Decimal
     status: str
+    completeness: ActualDataCompleteness = field(
+        default_factory=ActualDataCompleteness
+    )
 
 
 @dataclass(frozen=True)

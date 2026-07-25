@@ -11,12 +11,21 @@ from typing import Any
 from app.history.repository import HistoryRepository
 from app.money import from_cents, money
 from app.models import (
+    ActualDataCompleteness,
     ActualEntryType,
     AssumptionDifference,
     ForecastActualComparison,
     ForecastActualPeriodComparison,
     ForecastSnapshotRecord,
     PlanComparison,
+)
+
+COMPLETENESS_CATEGORY_ORDER = (
+    ActualEntryType.INCOME_RECEIVED,
+    ActualEntryType.BILL_PAID,
+    ActualEntryType.DEBT_PAYMENT,
+    ActualEntryType.SAVINGS_DEPOSIT,
+    ActualEntryType.PERSONAL_SPENDING,
 )
 
 
@@ -35,7 +44,12 @@ class HistoryComparisonService:
     def compare_forecast_to_actual(self, plan_id: int) -> ForecastActualComparison:
         """Compare persisted forecast totals with posted actual totals."""
         planned = self.latest_plan_forecast_totals(plan_id)
-        actual = self.actual_totals(plan_id)
+        entries = self.repository.list_actual_entries(plan_id)
+        actual = self.actual_totals(plan_id, entries=entries)
+        completeness = self.actual_data_completeness(
+            planned,
+            {entry.entry_type for entry in entries},
+        )
         actual_remaining = money(
             actual["income"]
             - actual["bills"]
@@ -45,7 +59,7 @@ class HistoryComparisonService:
             + actual["adjustment"]
         )
         status = "Insufficient actual data"
-        if any(value != Decimal("0.00") for value in actual.values()):
+        if completeness.is_complete:
             variance = money(actual_remaining - planned["remaining"])
             if variance > Decimal("10.00"):
                 status = "Ahead of plan"
@@ -67,6 +81,7 @@ class HistoryComparisonService:
             planned_remaining_cash=planned["remaining"],
             actual_remaining_cash=actual_remaining,
             status=status,
+            completeness=completeness,
         )
 
     def compare_forecast_to_actual_periods(
@@ -94,6 +109,17 @@ class HistoryComparisonService:
             planned_savings = from_cents(row[10])
             planned_withdrawal = from_cents(row[11])
             planned_remaining = from_cents(row[12])
+            planned = {
+                "income": planned_income,
+                "bills": planned_bills,
+                "bill_activity": money(
+                    planned_bills - from_cents(row[5])
+                ),
+                "debt": money(planned_debt_minimums + planned_snowball),
+                "savings": planned_savings,
+                "personal": planned_personal,
+            }
+            completeness = self.actual_data_completeness(planned, set(actual))
             actual_income = actual.get(ActualEntryType.INCOME_RECEIVED)
             actual_bills = actual.get(ActualEntryType.BILL_PAID)
             actual_debt = actual.get(ActualEntryType.DEBT_PAYMENT)
@@ -109,8 +135,14 @@ class HistoryComparisonService:
                 actual_personal,
                 actual_withdrawal,
                 actual_adjustment,
+                completeness.missing_categories,
             )
-            status = self.period_status(actual, actual_remaining, planned_remaining)
+            status = self.period_status(
+                actual,
+                actual_remaining,
+                planned_remaining,
+                completeness.missing_categories,
+            )
             comparisons.append(
                 ForecastActualPeriodComparison(
                     forecast_period_id=period_id,
@@ -141,7 +173,10 @@ class HistoryComparisonService:
                     actual_remaining_cash=actual_remaining,
                     debt_balance_variance=observations.get("debt"),
                     savings_balance_variance=observations.get("savings"),
-                    data_completeness=self.data_completeness(actual),
+                    data_completeness=self.data_completeness(
+                        actual,
+                        completeness.missing_categories,
+                    ),
                     status=status,
                     interpretation=self.period_interpretation(status),
                 )
@@ -347,19 +382,35 @@ class HistoryComparisonService:
             snapshot = self.active_plan_snapshot(plan.current_version_id)
         except ValueError:
             return zero_totals()
+        fixed_expenses = self.sum_snapshot_column(snapshot.id, "fixed_expenses")
+        personal_allowance = self.sum_snapshot_column(
+            snapshot.id,
+            "personal_allowance",
+        )
         return {
             "income": self.sum_snapshot_column(snapshot.id, "income"),
-            "bills": self.sum_snapshot_column(snapshot.id, "fixed_expenses"),
+            "bills": fixed_expenses,
+            "bill_activity": money(fixed_expenses - personal_allowance),
             "debt": self.snapshot_debt_payments(snapshot.id),
             "savings": self.sum_snapshot_column(snapshot.id, "savings_deposit"),
             "personal": self.sum_snapshot_column(snapshot.id, "personal_expenses_used"),
             "remaining": self.sum_snapshot_column(snapshot.id, "checking_remaining"),
         }
 
-    def actual_totals(self, plan_id: int) -> dict[str, Decimal]:
+    def actual_totals(
+        self,
+        plan_id: int,
+        *,
+        entries: list[Any] | None = None,
+    ) -> dict[str, Decimal]:
         """Return actual totals for one plan."""
         totals = zero_actual_totals()
-        for entry in self.repository.list_actual_entries(plan_id):
+        actual_entries = (
+            entries
+            if entries is not None
+            else self.repository.list_actual_entries(plan_id)
+        )
+        for entry in actual_entries:
             if entry.entry_type == ActualEntryType.INCOME_RECEIVED:
                 totals["income"] += entry.amount
             elif entry.entry_type == ActualEntryType.BILL_PAID:
@@ -375,6 +426,35 @@ class HistoryComparisonService:
             elif entry.entry_type == ActualEntryType.ADJUSTMENT:
                 totals["adjustment"] += entry.amount
         return {key: money(value) for key, value in totals.items()}
+
+    @staticmethod
+    def actual_data_completeness(
+        planned: dict[str, Decimal],
+        recorded_entry_types: set[ActualEntryType],
+    ) -> ActualDataCompleteness:
+        """Classify applicable actual categories from planned values and presence."""
+        planned_by_category = {
+            ActualEntryType.INCOME_RECEIVED: planned["income"],
+            ActualEntryType.BILL_PAID: planned.get(
+                "bill_activity",
+                planned["bills"],
+            ),
+            ActualEntryType.DEBT_PAYMENT: planned["debt"],
+            ActualEntryType.SAVINGS_DEPOSIT: planned["savings"],
+            ActualEntryType.PERSONAL_SPENDING: planned["personal"],
+        }
+        expected = tuple(
+            category
+            for category in COMPLETENESS_CATEGORY_ORDER
+            if planned_by_category[category] != Decimal("0.00")
+        )
+        recorded = tuple(
+            category for category in expected if category in recorded_entry_types
+        )
+        missing = tuple(
+            category for category in expected if category not in recorded_entry_types
+        )
+        return ActualDataCompleteness(expected, recorded, missing)
 
     def actual_totals_by_period(
         self,
@@ -465,17 +545,17 @@ class HistoryComparisonService:
         personal: Decimal | None,
         withdrawal: Decimal | None,
         adjustment: Decimal | None,
+        missing_categories: tuple[ActualEntryType, ...],
     ) -> Decimal | None:
         """Calculate remaining cash from actual entries."""
-        values = [income, bills, debt, savings, personal]
-        if any(value is None for value in values):
+        if missing_categories:
             return None
         return money(
-            income
-            - bills
-            - debt
-            - savings
-            - personal
+            (income or Decimal("0.00"))
+            - (bills or Decimal("0.00"))
+            - (debt or Decimal("0.00"))
+            - (savings or Decimal("0.00"))
+            - (personal or Decimal("0.00"))
             + (withdrawal or Decimal("0.00"))
             + (adjustment or Decimal("0.00"))
         )
@@ -485,18 +565,12 @@ class HistoryComparisonService:
         actual: dict[ActualEntryType, Decimal],
         actual_remaining: Decimal | None,
         planned_remaining: Decimal,
+        missing_categories: tuple[ActualEntryType, ...],
     ) -> str:
         """Return status for one forecast-vs-actual period."""
         if not actual:
             return "No actual activity recorded"
-        required = {
-            ActualEntryType.INCOME_RECEIVED,
-            ActualEntryType.BILL_PAID,
-            ActualEntryType.DEBT_PAYMENT,
-            ActualEntryType.SAVINGS_DEPOSIT,
-            ActualEntryType.PERSONAL_SPENDING,
-        }
-        if not required.issubset(actual):
+        if missing_categories:
             return "Insufficient actual data"
         variance_value = money(actual_remaining - planned_remaining)
         if variance_value > Decimal("10.00"):
@@ -506,18 +580,14 @@ class HistoryComparisonService:
         return "On track"
 
     @staticmethod
-    def data_completeness(actual: dict[ActualEntryType, Decimal]) -> str:
+    def data_completeness(
+        actual: dict[ActualEntryType, Decimal],
+        missing_categories: tuple[ActualEntryType, ...],
+    ) -> str:
         """Return data completeness for one actual period."""
         if not actual:
             return "none"
-        required = {
-            ActualEntryType.INCOME_RECEIVED,
-            ActualEntryType.BILL_PAID,
-            ActualEntryType.DEBT_PAYMENT,
-            ActualEntryType.SAVINGS_DEPOSIT,
-            ActualEntryType.PERSONAL_SPENDING,
-        }
-        return "complete" if required.issubset(actual) else "partial"
+        return "partial" if missing_categories else "complete"
 
     @staticmethod
     def period_interpretation(status: str) -> str:

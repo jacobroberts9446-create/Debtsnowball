@@ -349,6 +349,7 @@ class HistoryRepository:
         allowed = {
             "income",
             "fixed_expenses",
+            "personal_allowance",
             "personal_expenses_used",
             "minimum_debt_payments",
             "snowball_payment",

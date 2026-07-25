@@ -55,6 +55,21 @@ def history_plan_with_forecast(service, name="Correction Plan"):
     return config, plan
 
 
+def history_plan_for_config(service, config, name):
+    """Create a saved plan and persisted forecast for a supplied configuration."""
+    summaries, forecast = short_plan(config)
+    plan = service.create_plan(name, config)
+    version = service.list_plan_versions(plan.id)[0]
+    service.generate_and_save_forecast(
+        version.id,
+        forecast,
+        starting_savings=config.settings.starting_savings,
+        pay_period_summaries=summaries,
+        starting_debts=config.debts,
+    )
+    return plan
+
+
 def exported_plan_payload(tmp_path, *, name="Tamper Plan"):
     service = PlanHistoryService(tmp_path / f"{name.replace(' ', '_')}.sqlite")
     config = Config().load("config.json")
@@ -341,6 +356,154 @@ def test_aggregate_mixed_activity_uses_exact_decimal_cash_flow(tmp_path):
     assert comparison.actual_savings == Decimal("149.99")
     assert comparison.actual_personal_spending == Decimal("100.04")
     assert comparison.actual_remaining_cash == Decimal("958.00")
+
+
+def test_aggregate_completeness_requires_applicable_recorded_categories(tmp_path):
+    service = PlanHistoryService(tmp_path / "aggregate-completeness.sqlite")
+    config, plan = history_plan_with_forecast(service, "Aggregate Completeness")
+    expected = (
+        ActualEntryType.INCOME_RECEIVED,
+        ActualEntryType.BILL_PAID,
+        ActualEntryType.DEBT_PAYMENT,
+        ActualEntryType.SAVINGS_DEPOSIT,
+        ActualEntryType.PERSONAL_SPENDING,
+    )
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("0.00"),
+    )
+
+    income_only = service.compare_forecast_to_actual(plan.id)
+
+    assert income_only.status == "Insufficient actual data"
+    assert income_only.completeness.expected_categories == expected
+    assert income_only.completeness.recorded_categories == (
+        ActualEntryType.INCOME_RECEIVED,
+    )
+    assert income_only.completeness.missing_categories == expected[1:]
+
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.BILL_PAID,
+        Decimal("0.00"),
+    )
+    income_and_bills = service.compare_forecast_to_actual(plan.id)
+
+    assert income_and_bills.status == "Insufficient actual data"
+    assert income_and_bills.completeness.recorded_categories == expected[:2]
+    assert income_and_bills.completeness.missing_categories == expected[2:]
+
+
+def test_all_applicable_zero_value_entries_count_as_complete(tmp_path):
+    service = PlanHistoryService(tmp_path / "zero-completeness.sqlite")
+    config, plan = history_plan_with_forecast(service, "Zero Completeness")
+    for entry_type in (
+        ActualEntryType.INCOME_RECEIVED,
+        ActualEntryType.BILL_PAID,
+        ActualEntryType.DEBT_PAYMENT,
+        ActualEntryType.SAVINGS_DEPOSIT,
+        ActualEntryType.PERSONAL_SPENDING,
+    ):
+        service.add_actual_entry(
+            plan.id,
+            config.settings.first_paycheck,
+            entry_type,
+            Decimal("0.00"),
+        )
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert comparison.completeness.is_complete is True
+    assert comparison.completeness.missing_categories == ()
+    assert comparison.status == "On track"
+
+
+def test_withdrawals_and_adjustments_do_not_satisfy_required_categories(tmp_path):
+    service = PlanHistoryService(tmp_path / "optional-activity.sqlite")
+    config, plan = history_plan_with_forecast(service, "Optional Activity")
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.SAVINGS_WITHDRAWAL,
+        Decimal("20.00"),
+    )
+    service.add_actual_entry(
+        plan.id,
+        config.settings.first_paycheck,
+        ActualEntryType.ADJUSTMENT,
+        Decimal("5.00"),
+    )
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert comparison.status == "Insufficient actual data"
+    assert comparison.completeness.recorded_categories == ()
+    assert comparison.completeness.missing_categories == (
+        ActualEntryType.INCOME_RECEIVED,
+        ActualEntryType.BILL_PAID,
+        ActualEntryType.DEBT_PAYMENT,
+        ActualEntryType.SAVINGS_DEPOSIT,
+        ActualEntryType.PERSONAL_SPENDING,
+    )
+
+
+def test_debt_free_plan_does_not_require_debt_activity(tmp_path):
+    service = PlanHistoryService(tmp_path / "no-debt-completeness.sqlite")
+    config = Config().load("config.json")
+    config.debts = []
+    plan = history_plan_for_config(service, config, "No Debt")
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert ActualEntryType.DEBT_PAYMENT not in comparison.completeness.expected_categories
+
+
+def test_plan_without_savings_contribution_does_not_require_savings_activity(tmp_path):
+    service = PlanHistoryService(tmp_path / "no-savings-completeness.sqlite")
+    config = Config().load("config.json")
+    config.settings.starting_savings = config.settings.savings_goal
+    plan = history_plan_for_config(service, config, "No Savings")
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert (
+        ActualEntryType.SAVINGS_DEPOSIT
+        not in comparison.completeness.expected_categories
+    )
+
+
+def test_plan_without_bills_does_not_require_bill_activity(tmp_path):
+    service = PlanHistoryService(tmp_path / "no-bills-completeness.sqlite")
+    config = Config().load("config.json")
+    config.bills = []
+    config.settings.rent_per_paycheck = Decimal("0.00")
+    config.settings.insurance_per_paycheck = Decimal("0.00")
+    plan = history_plan_for_config(service, config, "No Bills")
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert ActualEntryType.BILL_PAID not in comparison.completeness.expected_categories
+    assert (
+        ActualEntryType.PERSONAL_SPENDING
+        in comparison.completeness.expected_categories
+    )
+
+
+def test_zero_planned_personal_spending_does_not_require_personal_activity(tmp_path):
+    service = PlanHistoryService(tmp_path / "no-personal-completeness.sqlite")
+    config = Config().load("config.json")
+    config.settings.personal_per_paycheck = Decimal("0.00")
+    plan = history_plan_for_config(service, config, "No Personal Spending")
+
+    comparison = service.compare_forecast_to_actual(plan.id)
+
+    assert (
+        ActualEntryType.PERSONAL_SPENDING
+        not in comparison.completeness.expected_categories
+    )
 
 
 def test_atomic_actual_correction_preserves_rows_periods_and_totals(tmp_path):
@@ -1181,6 +1344,70 @@ def test_period_comparison_includes_withdrawals_and_signed_adjustments(tmp_path)
     assert comparison.actual_savings_withdrawal == Decimal("50.00")
     assert comparison.actual_personal_spending == Decimal("100.00")
     assert comparison.actual_remaining_cash == Decimal("370.20")
+
+
+def test_period_completeness_uses_applicable_categories_and_entry_presence(tmp_path):
+    service = PlanHistoryService(tmp_path / "period-completeness.sqlite")
+    config, plan = history_plan_with_forecast(service, "Period Completeness")
+    pay_date = config.settings.first_paycheck
+    service.add_actual_entry(
+        plan.id,
+        pay_date,
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("0.00"),
+    )
+    partial = service.compare_forecast_to_actual_periods(plan.id)[0]
+
+    assert partial.data_completeness == "partial"
+    assert partial.status == "Insufficient actual data"
+    assert partial.actual_remaining_cash is None
+
+    for entry_type in (
+        ActualEntryType.BILL_PAID,
+        ActualEntryType.DEBT_PAYMENT,
+        ActualEntryType.SAVINGS_DEPOSIT,
+        ActualEntryType.PERSONAL_SPENDING,
+    ):
+        service.add_actual_entry(
+            plan.id,
+            pay_date,
+            entry_type,
+            Decimal("0.00"),
+        )
+    complete = service.compare_forecast_to_actual_periods(plan.id)[0]
+
+    assert complete.data_completeness == "complete"
+    assert complete.status == "On track"
+    assert complete.actual_remaining_cash == Decimal("0.00")
+
+
+def test_period_completeness_does_not_require_zero_planned_categories(tmp_path):
+    service = PlanHistoryService(tmp_path / "period-applicability.sqlite")
+    config = Config().load("config.json")
+    config.bills = []
+    config.settings.rent_per_paycheck = Decimal("0.00")
+    config.settings.insurance_per_paycheck = Decimal("0.00")
+    config.settings.personal_per_paycheck = Decimal("0.00")
+    config.settings.starting_savings = config.settings.savings_goal
+    plan = history_plan_for_config(service, config, "Period Applicability")
+    for entry_type in (
+        ActualEntryType.INCOME_RECEIVED,
+        ActualEntryType.DEBT_PAYMENT,
+    ):
+        service.add_actual_entry(
+            plan.id,
+            config.settings.first_paycheck,
+            entry_type,
+            Decimal("0.00"),
+        )
+
+    comparison = service.compare_forecast_to_actual_periods(plan.id)[0]
+
+    assert comparison.planned_bills == Decimal("0.00")
+    assert comparison.planned_savings_deposit == Decimal("0.00")
+    assert comparison.planned_personal_spending == Decimal("0.00")
+    assert comparison.data_completeness == "complete"
+    assert comparison.status == "On track"
 
 
 def test_persisted_forecast_detail_reconciles_exactly(tmp_path):

@@ -21,7 +21,7 @@ from app.menu import (
     run_menu,
     wait_for_enter,
 )
-from app.models import ActualEntryType
+from app.models import ActualDataCompleteness, ActualEntryType
 from app.money import format_currency, money
 from app.plan_setup import parse_first_paycheck_date
 from app.workflows.plan_presenter import display_plan_name, format_saved_datetime
@@ -58,6 +58,13 @@ ACTIVITY_TYPE_LABELS = {
     ActualEntryType.SAVINGS_WITHDRAWAL: "Savings Withdrawal",
     ActualEntryType.PERSONAL_SPENDING: "Personal Spending",
     ActualEntryType.ADJUSTMENT: "Adjustment",
+}
+COMPLETENESS_LABELS = {
+    ActualEntryType.INCOME_RECEIVED: "Income",
+    ActualEntryType.BILL_PAID: "Bills",
+    ActualEntryType.DEBT_PAYMENT: "Debt Payments",
+    ActualEntryType.SAVINGS_DEPOSIT: "Savings",
+    ActualEntryType.PERSONAL_SPENDING: "Personal Spending",
 }
 
 
@@ -663,7 +670,12 @@ def show_progress_summary(
         versions = service.list_plan_versions(current_plan.id)
         actual_entries = service.list_actual_entries(current_plan.id)
         observations = service.list_balance_observations(current_plan.id)
-        status = _progress_status(service, current_plan.id, actual_entries, observations)
+        comparison = (
+            None
+            if not actual_entries and not observations
+            else service.compare_forecast_to_actual(current_plan.id)
+        )
+        status = "No progress recorded" if comparison is None else comparison.status
     except EXPECTED_SERVICE_ERRORS as exc:
         print_error(str(exc), output_func)
     else:
@@ -685,6 +697,8 @@ def show_progress_summary(
             ],
             output_func,
         )
+        if comparison is not None:
+            _show_completeness_details(comparison.completeness, output_func)
     wait_for_enter(input_func)
     return False
 
@@ -714,6 +728,8 @@ def show_forecast_vs_actual(
                 "to compare.",
                 output_func,
             )
+        elif comparison.completeness.missing_categories:
+            _show_completeness_details(comparison.completeness, output_func)
         elif comparison.status == "Insufficient actual data":
             print_warning(
                 "There is not enough recorded progress to compare yet.",
@@ -1334,13 +1350,22 @@ def _format_date(value: date) -> str:
     return f"{value:%b} {value.day}, {value:%Y}"
 
 
-def _progress_status(
-    service: PlanHistoryService,
-    plan_id: int,
-    actual_entries: list[Any],
-    observations: list[Any],
-) -> str:
-    """Return the existing comparison status when progress has been recorded."""
-    if not actual_entries and not observations:
-        return "No progress recorded"
-    return service.compare_forecast_to_actual(plan_id).status
+def _show_completeness_details(
+    completeness: ActualDataCompleteness,
+    output_func: OutputFunc,
+) -> None:
+    """Display concise human-readable actual-data completeness details."""
+    if not completeness.missing_categories:
+        return
+    print_warning("Progress data is incomplete.", output_func)
+    output_func("")
+    output_func("Recorded:")
+    if completeness.recorded_categories:
+        for category in completeness.recorded_categories:
+            output_func(f"- {COMPLETENESS_LABELS[category]}")
+    else:
+        output_func("- None yet")
+    output_func("")
+    output_func("Still needed:")
+    for category in completeness.missing_categories:
+        output_func(f"- {COMPLETENESS_LABELS[category]}")

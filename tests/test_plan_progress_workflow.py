@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models import ActualEntryType, ForecastActualComparison
+from app.models import (
+    ActualDataCompleteness,
+    ActualEntryType,
+    ForecastActualComparison,
+)
 from app.workflows import plan_progress
 
 
@@ -442,6 +446,61 @@ def test_forecast_vs_actual_displays_net_savings_and_adjusted_remaining_cash() -
     assert "$149.99" in text
     assert "Remaining cash" in text
     assert "$958.00" in text
+
+
+def test_progress_views_display_human_readable_completeness_details() -> None:
+    """Both views list recorded and missing categories without enum names or IDs."""
+    service = FakeProgressService()
+    service.comparison = replace(
+        comparison("Insufficient actual data"),
+        completeness=ActualDataCompleteness(
+            expected_categories=(
+                ActualEntryType.INCOME_RECEIVED,
+                ActualEntryType.BILL_PAID,
+                ActualEntryType.DEBT_PAYMENT,
+                ActualEntryType.SAVINGS_DEPOSIT,
+                ActualEntryType.PERSONAL_SPENDING,
+            ),
+            recorded_categories=(
+                ActualEntryType.INCOME_RECEIVED,
+                ActualEntryType.BILL_PAID,
+            ),
+            missing_categories=(
+                ActualEntryType.DEBT_PAYMENT,
+                ActualEntryType.SAVINGS_DEPOSIT,
+                ActualEntryType.PERSONAL_SPENDING,
+            ),
+        ),
+    )
+    summary_output = []
+    comparison_output = []
+
+    plan_progress.show_progress_summary(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=summary_output.append,
+    )
+    plan_progress.show_forecast_vs_actual(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=comparison_output.append,
+    )
+
+    for output in (summary_output, comparison_output):
+        text = output_text(output)
+        assert "Warning: Progress data is incomplete." in text
+        assert "Recorded:" in text
+        assert "- Income" in text
+        assert "- Bills" in text
+        assert "Still needed:" in text
+        assert "- Debt Payments" in text
+        assert "- Savings" in text
+        assert "- Personal Spending" in text
+        assert "INCOME_RECEIVED" not in text
+        assert "income_received" not in text
+        assert "732" not in text
 
 
 def test_forecast_vs_actual_explains_when_no_progress_exists() -> None:
