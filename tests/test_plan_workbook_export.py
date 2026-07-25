@@ -593,7 +593,7 @@ def test_guided_saved_plan_generates_physical_workbook(monkeypatch, tmp_path) ->
             "1",
             "2",
             "",
-            "8",
+            "9",
             "2",
             "4",
         ],
@@ -619,7 +619,7 @@ def test_guided_saved_plan_generates_physical_workbook(monkeypatch, tmp_path) ->
     stale_mtime = workbook_path.stat().st_mtime_ns
     assert workbook_path.stat().st_size == len(b"stale")
 
-    second_run_choices = iter(["2", "1", "2", "", "8", "2", "4"])
+    second_run_choices = iter(["2", "1", "2", "", "9", "2", "4"])
     second_output = []
     run.run_main_menu(
         input_func=lambda _prompt: next(second_run_choices),

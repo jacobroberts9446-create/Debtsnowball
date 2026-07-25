@@ -26,6 +26,7 @@ from app.workflows.plan_presenter import (
     format_saved_datetime,
     version_count_label,
 )
+from app.workflows.plan_progress import run_plan_progress_menu
 from app.workflows.workbook_export import (
     build_workbook_outputs,
     config_from_plan_version,
@@ -364,7 +365,17 @@ def run_selected_plan_menu(
                 output_func,
             ),
         ),
-        MenuOption("8", "Back", lambda: True),
+        MenuOption(
+            "8",
+            "Track Progress",
+            lambda: run_plan_progress_menu(
+                service,
+                plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("9", "Back", lambda: True),
     ]
 
     run_menu(

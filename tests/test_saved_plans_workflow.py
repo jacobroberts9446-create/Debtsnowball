@@ -264,7 +264,7 @@ def test_saved_plans_list_populated_without_raw_ids() -> None:
 
 def test_saved_plan_selection_opens_plan_details_actions() -> None:
     """Selecting a saved plan exposes implemented plan-management actions."""
-    choices = iter(["1", "8", "2"])
+    choices = iter(["1", "9", "2"])
     output = []
     service = FakePlanHistoryService(
         [SimpleNamespace(id=4, name="Current Plan", description="", updated_at="")]
@@ -287,14 +287,15 @@ def test_saved_plan_selection_opens_plan_details_actions() -> None:
     assert "5. Rename Plan" in text
     assert "6. Duplicate Plan" in text
     assert "7. Delete Plan" in text
-    assert "8. Back" in text
+    assert "8. Track Progress" in text
+    assert "9. Back" in text
     assert preferences.marked[0] == (4, "Current Plan")
 
 
 def test_saved_plan_history_action_is_dispatched_for_selected_plan(monkeypatch) -> None:
     """Selected-plan history is delegated without asking for the plan ID again."""
     prompts = []
-    choices = iter(["1", "4", "", "8", "2"])
+    choices = iter(["1", "4", "", "9", "2"])
     output = []
     calls = []
     service = FakePlanHistoryService(
@@ -325,6 +326,36 @@ def test_saved_plan_history_action_is_dispatched_for_selected_plan(monkeypatch) 
     assert "Plan ID: " not in prompts
 
 
+def test_saved_plan_progress_action_is_dispatched_for_selected_plan(monkeypatch) -> None:
+    """Selected-plan progress delegates without asking for the plan ID again."""
+    choices = iter(["1", "8", "9", "2"])
+    output = []
+    calls = []
+    service = FakePlanHistoryService(
+        [SimpleNamespace(id=7, name="Plan 7", description="", updated_at="")]
+    )
+
+    def fake_progress_action(service_arg, plan, input_func, output_func):
+        calls.append((service_arg, plan.id))
+        output_func("Progress for selected plan")
+        return False
+
+    monkeypatch.setattr(
+        saved_plans,
+        "run_plan_progress_menu",
+        fake_progress_action,
+    )
+    saved_plans.run_saved_plans_menu(
+        plan_history_service_factory=lambda: service,
+        preferences_factory=FakePreferences,
+        input_func=lambda _prompt: next(choices),
+        output_func=output.append,
+    )
+
+    assert calls == [(service, 7)]
+    assert "Progress for selected plan" in output
+
+
 def test_saved_plan_invalid_selection_returns_to_saved_plans() -> None:
     """Invalid saved-plan choices use a friendly warning."""
     choices = iter(["bad", "2"])
@@ -346,7 +377,7 @@ def test_saved_plan_invalid_selection_returns_to_saved_plans() -> None:
 
 def test_saved_plan_view_latest_summary() -> None:
     """Plan details can show the latest saved summary."""
-    choices = iter(["1", "1", "", "8", "2"])
+    choices = iter(["1", "1", "", "9", "2"])
     output = []
     service = FakePlanHistoryService(
         [
@@ -625,7 +656,7 @@ def test_recent_plans_empty_invalid_stale_and_valid_navigation() -> None:
     )
 
     valid_preferences = FakePreferences([SimpleNamespace(id=4, name="Current Plan")])
-    choices = iter(["bad", "1", "8", "2"])
+    choices = iter(["bad", "1", "9", "2"])
     valid_output = []
     saved_plans.list_recent_plans_action(
         service,
@@ -661,7 +692,7 @@ def test_recent_plan_list_error_is_handled() -> None:
 
 def test_plan_details_include_description_and_workbook_delegates(monkeypatch) -> None:
     """Plan details render descriptions and delegate workbook generation."""
-    choices = iter(["2", "8"])
+    choices = iter(["2", "9"])
     output = []
     calls = []
     plan = plan_stub(description="Helpful description")
