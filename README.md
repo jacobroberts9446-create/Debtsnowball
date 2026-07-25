@@ -568,6 +568,10 @@ History belongs to one selected saved plan and represents that plan's prior
 saved versions. Open `Saved Plans`, choose a plan by name, then choose
 `View History`.
 
+`Track Progress` on a selected plan provides a forecast-versus-actual summary
+and records income, bill payments, debt payments, savings deposits, personal
+spending, and signed adjustments without requiring database IDs.
+
 Optional history features include:
 
 - Named plans with immutable versions.

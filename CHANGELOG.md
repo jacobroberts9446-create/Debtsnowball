@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 - Portable Windows executable launcher build
 - Packaged-app path handling for bundled resources and writable user data
 - PyInstaller one-folder build configuration
+- Interactive activity recording for income, bills, debt payments, savings,
+  personal spending, and adjustments
 
 ## [1.1.0] - Unreleased
 
