@@ -76,10 +76,10 @@ class HistoryComparisonService:
         plan = self.repository.get_plan(plan_id)
         if plan.current_version_id is None:
             return []
-        snapshot = self.latest_snapshot_for_version(plan.current_version_id)
+        snapshot = self.active_plan_snapshot(plan.current_version_id)
         periods = self.repository.forecast_period_rows(snapshot.id)
-        actual_by_period = self.actual_totals_by_period(plan_id)
-        observations_by_period = self.balance_observations_by_period(plan_id)
+        actual_by_period = self.actual_totals_by_period(plan_id, periods)
+        observations_by_period = self.balance_observations_by_period(plan_id, periods)
         comparisons = []
         for row in periods:
             period_id = row[0]
@@ -234,6 +234,17 @@ class HistoryComparisonService:
             self.repository.latest_snapshot_id_for_version(plan_version_id)
         )
 
+    def active_plan_snapshot(self, plan_version_id: int) -> ForecastSnapshotRecord:
+        """Return the active version's forecast or an exact-config predecessor."""
+        try:
+            return self.latest_snapshot_for_version(plan_version_id)
+        except ValueError:
+            return self.repository.get_forecast_snapshot(
+                self.repository.latest_compatible_snapshot_id_for_version(
+                    plan_version_id
+                )
+            )
+
     def payoff_order(self, snapshot_id: int) -> list[str]:
         """Return payoff order for a forecast snapshot."""
         with self.repository.connection() as conn:
@@ -330,7 +341,7 @@ class HistoryComparisonService:
         if plan.current_version_id is None:
             return zero_totals()
         try:
-            snapshot = self.latest_snapshot_for_version(plan.current_version_id)
+            snapshot = self.active_plan_snapshot(plan.current_version_id)
         except ValueError:
             return zero_totals()
         return {
@@ -364,51 +375,59 @@ class HistoryComparisonService:
     def actual_totals_by_period(
         self,
         plan_id: int,
+        periods: list[tuple[Any, ...]],
     ) -> dict[int, dict[ActualEntryType, Decimal]]:
-        """Return actual totals grouped by forecast period."""
+        """Return actual totals grouped against the selected forecast periods."""
         totals: dict[int, dict[ActualEntryType, Decimal]] = {}
-        with self.repository.connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT forecast_period_id, entry_type, amount
-                FROM actual_transactions
-                WHERE plan_id = ? AND forecast_period_id IS NOT NULL
-                """,
-                (plan_id,),
-            ).fetchall()
-        for period_id, entry_type, amount in rows:
+        for actual in self.repository.list_actual_entries(plan_id):
+            period_id = self.period_id_for_date(periods, actual.entry_date)
+            if period_id is None:
+                continue
             bucket = totals.setdefault(period_id, {})
-            entry = ActualEntryType(entry_type)
-            bucket[entry] = money(bucket.get(entry, Decimal("0.00")) + from_cents(amount))
+            bucket[actual.entry_type] = money(
+                bucket.get(actual.entry_type, Decimal("0.00")) + actual.amount
+            )
         return totals
 
     def balance_observations_by_period(
         self,
         plan_id: int,
+        periods: list[tuple[Any, ...]],
     ) -> dict[int, dict[str, Decimal]]:
-        """Return balance observation variances grouped by period."""
+        """Return observation variances against the selected forecast periods."""
         observations: dict[int, dict[str, Decimal]] = {}
         with self.repository.connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT bo.forecast_period_id, bo.observation_type, bo.balance,
-                       fp.id
-                FROM balance_observations bo
-                LEFT JOIN forecast_periods fp ON fp.id = bo.forecast_period_id
-                WHERE bo.plan_id = ? AND bo.forecast_period_id IS NOT NULL
-                """,
-                (plan_id,),
-            ).fetchall()
-            for period_id, observation_type, balance, _ in rows:
+            for observation in self.repository.list_balance_observations(plan_id):
+                period_id = self.period_id_for_date(periods, observation.observation_date)
+                if period_id is None:
+                    continue
                 bucket = observations.setdefault(period_id, {})
                 key = (
                     "debt"
-                    if observation_type == ActualEntryType.DEBT_BALANCE_OBSERVATION.value
+                    if observation.observation_type
+                    == ActualEntryType.DEBT_BALANCE_OBSERVATION
                     else "savings"
                 )
                 planned = self.planned_balance_for_period(conn, period_id, key)
-                bucket[key] = money(from_cents(balance) - planned)
+                bucket[key] = money(observation.balance - planned)
         return observations
+
+    @staticmethod
+    def period_id_for_date(
+        periods: list[tuple[Any, ...]],
+        value: date,
+    ) -> int | None:
+        """Match a date to one period using paycheck-date windows."""
+        for index, row in enumerate(periods):
+            start_date = date.fromisoformat(row[2])
+            next_start = (
+                date.fromisoformat(periods[index + 1][2])
+                if index + 1 < len(periods)
+                else date.max
+            )
+            if start_date <= value < next_start:
+                return int(row[0])
+        return None
 
     @staticmethod
     def planned_balance_for_period(

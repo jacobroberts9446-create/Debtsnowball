@@ -303,6 +303,30 @@ class HistoryRepository:
             raise ValueError("plan version does not have a saved forecast snapshot.")
         return int(row[0])
 
+    def latest_compatible_snapshot_id_for_version(self, plan_version_id: int) -> int:
+        """Return the latest snapshot for the same plan and configuration."""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT fs.id
+                FROM plan_versions AS selected
+                JOIN plan_versions AS compatible
+                  ON compatible.plan_id = selected.plan_id
+                 AND compatible.config_fingerprint = selected.config_fingerprint
+                JOIN forecast_snapshots AS fs
+                  ON fs.plan_version_id = compatible.id
+                WHERE selected.id = ?
+                ORDER BY fs.created_at DESC, fs.id DESC
+                LIMIT 1
+                """,
+                (plan_version_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(
+                "plan version does not have a compatible saved forecast snapshot."
+            )
+        return int(row[0])
+
     def forecast_period_rows(self, snapshot_id: int) -> list[tuple[Any, ...]]:
         """Return raw forecast period rows for comparison workflows."""
         with self.connection() as conn:

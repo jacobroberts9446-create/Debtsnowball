@@ -894,6 +894,138 @@ def test_actual_entries_and_observations_match_forecast_period_windows(tmp_path)
     assert comparisons[0].debt_balance_variance == Decimal("-5.00")
 
 
+def test_progress_is_rematched_to_new_version_periods_without_mutating_history(tmp_path):
+    service = PlanHistoryService(tmp_path / "version-progress.sqlite")
+    config = Config().load("config.json")
+    summaries, forecast = short_plan(config)
+    plan = service.create_plan("Version Progress", config)
+    version_one = service.list_plan_versions(plan.id)[0]
+    service.generate_and_save_forecast(
+        version_one.id,
+        forecast,
+        starting_savings=config.settings.starting_savings,
+        pay_period_summaries=summaries,
+        starting_debts=config.debts,
+    )
+    activity_date = date(2026, 8, 1)
+    service.add_actual_entry(
+        plan.id,
+        activity_date,
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("100.00"),
+    )
+    service.add_actual_entry(
+        plan.id,
+        activity_date,
+        ActualEntryType.BILL_PAID,
+        Decimal("25.00"),
+    )
+    service.add_actual_entry(
+        plan.id,
+        date(2026, 8, 10),
+        ActualEntryType.BILL_PAID,
+        Decimal("15.00"),
+    )
+    observation = service.add_balance_observation(
+        plan.id,
+        activity_date,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        forecast.periods[1].total_debt_balance,
+    )
+    original_period_id = observation.forecast_period_id
+
+    changed = deepcopy(config)
+    changed.settings.first_paycheck = date(2026, 7, 31)
+    changed_summaries, changed_forecast = short_plan(changed)
+    version_two = service.save_plan_version(plan.id, changed)
+    service.generate_and_save_forecast(
+        version_two.id,
+        changed_forecast,
+        starting_savings=changed.settings.starting_savings,
+        pay_period_summaries=changed_summaries,
+        starting_debts=changed.debts,
+    )
+
+    comparisons = service.compare_forecast_to_actual_periods(plan.id)
+    first = comparisons[0]
+    with closing(sqlite3.connect(tmp_path / "version-progress.sqlite")) as conn:
+        actual_rows = conn.execute(
+            """
+            SELECT forecast_period_id
+            FROM actual_transactions
+            WHERE plan_id = ?
+            ORDER BY id
+            """,
+            (plan.id,),
+        ).fetchall()
+        observation_row = conn.execute(
+            """
+            SELECT forecast_period_id
+            FROM balance_observations
+            WHERE id = ?
+            """,
+            (observation.id,),
+        ).fetchone()
+        foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert first.pay_date == date(2026, 7, 31)
+    assert first.actual_income == Decimal("100.00")
+    assert first.actual_bills == Decimal("40.00")
+    assert first.debt_balance_variance == money(
+        forecast.periods[1].total_debt_balance
+        - changed_forecast.periods[0].total_debt_balance
+    )
+    assert len(service.list_actual_entries(plan.id)) == 3
+    assert len(service.list_balance_observations(plan.id)) == 1
+    assert {row[0] for row in actual_rows} == {original_period_id}
+    assert observation_row == (original_period_id,)
+    assert first.forecast_period_id != original_period_id
+    assert foreign_key_errors == []
+
+
+def test_progress_survives_multiple_versions_and_restored_version(tmp_path):
+    service = PlanHistoryService(tmp_path / "restore-progress.sqlite")
+    config = Config().load("config.json")
+    summaries, forecast = short_plan(config)
+    plan = service.create_plan("Restore Progress", config)
+    version_one = service.list_plan_versions(plan.id)[0]
+    service.generate_and_save_forecast(
+        version_one.id,
+        forecast,
+        starting_savings=config.settings.starting_savings,
+        pay_period_summaries=summaries,
+        starting_debts=config.debts,
+    )
+    pay_date = forecast.periods[0].paycheck_date
+    service.add_actual_entry(
+        plan.id,
+        pay_date,
+        ActualEntryType.DEBT_PAYMENT,
+        Decimal("75.00"),
+    )
+
+    version_two = service.save_plan_version(plan.id, config, force=True)
+    service.generate_and_save_forecast(
+        version_two.id,
+        forecast,
+        starting_savings=config.settings.starting_savings,
+        pay_period_summaries=summaries,
+        starting_debts=config.debts,
+    )
+    assert service.compare_forecast_to_actual_periods(plan.id)[
+        0
+    ].actual_debt_payments == Decimal("75.00")
+
+    restored = service.restore_plan_version(version_one.id)
+    restored_comparison = service.compare_forecast_to_actual_periods(plan.id)
+
+    assert restored.version_number == 3
+    assert restored_comparison[0].actual_debt_payments == Decimal("75.00")
+    assert len(service.list_actual_entries(plan.id)) == 1
+    with pytest.raises(ValueError, match="does not have a saved forecast"):
+        service._latest_snapshot_for_version(restored.id)
+
+
 def test_period_comparison_reports_complete_on_track_actuals(tmp_path):
     service = PlanHistoryService(tmp_path / "history.sqlite")
     config = Config().load("config.json")
