@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - PyInstaller one-folder build configuration
 - Interactive activity recording for income, bills, debt payments, savings,
   personal spending, and adjustments
+- Interactive recording of current debt and savings balances
 
 ## [1.1.0] - Unreleased
 

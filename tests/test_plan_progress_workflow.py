@@ -103,6 +103,7 @@ class FakeProgressService:
         self.error_method = None
         self.calls = []
         self.actual_entry_calls = []
+        self.balance_observation_calls = []
 
     def _raise_if_requested(self, method: str) -> None:
         if self.error_method == method:
@@ -165,6 +166,31 @@ class FakeProgressService:
         self.actual_entries.append(entry)
         return entry
 
+    def add_balance_observation(
+        self,
+        plan_id,
+        observation_date,
+        observation_type,
+        balance,
+        **kwargs,
+    ):
+        self.calls.append(("add_balance_observation", plan_id))
+        self._raise_if_requested("add_balance_observation")
+        call = {
+            "plan_id": plan_id,
+            "observation_date": observation_date,
+            "observation_type": observation_type,
+            "balance": balance,
+            **kwargs,
+        }
+        self.balance_observation_calls.append(call)
+        observation = SimpleNamespace(
+            id=3000 + len(self.observations),
+            **call,
+        )
+        self.observations.append(observation)
+        return observation
+
 
 def output_text(output: list[str]) -> str:
     """Join captured output for readable assertions."""
@@ -174,7 +200,7 @@ def output_text(output: list[str]) -> str:
 def test_progress_menu_routes_summary_and_forecast_actions() -> None:
     """The menu opens both read-only views and returns through Back."""
     service = FakeProgressService()
-    choices = iter(["1", "", "2", "", "4"])
+    choices = iter(["1", "", "2", "", "5"])
     output = []
 
     result = plan_progress.run_plan_progress_menu(
@@ -190,7 +216,8 @@ def test_progress_menu_routes_summary_and_forecast_actions() -> None:
     assert "1. Progress Summary" in text
     assert "2. Forecast vs Actual" in text
     assert "3. Record Activity" in text
-    assert "4. Back" in text
+    assert "4. Record Balance" in text
+    assert "5. Back" in text
     assert "Recorded transactions" in text
     assert "Debt payments" in text
 
@@ -290,7 +317,7 @@ def test_progress_summary_reports_empty_progress_without_comparison_call() -> No
 def test_progress_menu_invalid_selection_then_back() -> None:
     """Invalid choices receive the generic friendly warning and redisplay."""
     service = FakeProgressService()
-    choices = iter(["invalid", "4"])
+    choices = iter(["invalid", "5"])
     output = []
 
     plan_progress.run_plan_progress_menu(
@@ -300,7 +327,7 @@ def test_progress_menu_invalid_selection_then_back() -> None:
         output_func=output.append,
     )
 
-    assert "Warning: Please choose one of: 1, 2, 3, 4." in output
+    assert "Warning: Please choose one of: 1, 2, 3, 4, 5." in output
     assert output.count("Track Progress - Household Plan") == 2
 
 
@@ -434,7 +461,7 @@ def test_progress_menu_routes_to_record_activity(monkeypatch) -> None:
         lambda *_args, **_kwargs: calls.append("record") or False,
     )
 
-    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["3", "4"])
+    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["3", "5"])
 
     assert calls == ["record"]
 
@@ -821,5 +848,404 @@ def test_recorded_activity_appears_in_subsequent_progress_summary() -> None:
 
     text = output_text(output)
     assert "Recorded transactions" in text
+    assert "1" in text
+    assert "On track" in text
+
+
+def test_progress_menu_routes_to_record_balance(monkeypatch) -> None:
+    """Track Progress opens Record Balance and returns to its caller."""
+    service = FakeProgressService()
+    calls = []
+    monkeypatch.setattr(
+        plan_progress,
+        "run_record_balance_menu",
+        lambda *_args, **_kwargs: calls.append("balance") or False,
+    )
+
+    run_with_inputs(plan_progress.run_plan_progress_menu, service, ["4", "5"])
+
+    assert calls == ["balance"]
+
+
+def test_record_balance_menu_routes_debt_and_savings(monkeypatch) -> None:
+    """The balance menu delegates both choices to their public actions."""
+    service = FakeProgressService()
+    routed = []
+    monkeypatch.setattr(
+        plan_progress,
+        "record_debt_balance_action",
+        lambda *_args, **_kwargs: routed.append("debt") or False,
+    )
+    monkeypatch.setattr(
+        plan_progress,
+        "record_savings_balance_action",
+        lambda *_args, **_kwargs: routed.append("savings") or False,
+    )
+
+    _, output = run_with_inputs(
+        plan_progress.run_record_balance_menu,
+        service,
+        ["1", "2", "3"],
+    )
+
+    assert routed == ["debt", "savings"]
+    text = output_text(output)
+    assert "Record Balance" in text
+    assert "1. Debt Balance" in text
+    assert "2. Savings Balance" in text
+    assert "3. Back" in text
+
+
+def test_record_balance_menu_invalid_selection_then_back() -> None:
+    """Invalid balance-menu choices show the shared friendly warning."""
+    service = FakeProgressService()
+
+    _, output = run_with_inputs(
+        plan_progress.run_record_balance_menu,
+        service,
+        ["invalid", "3"],
+    )
+
+    assert "Warning: Please choose one of: 1, 2, 3." in output
+    assert output.count("Record Balance") == 2
+
+
+def test_debt_balance_validates_fields_and_persists_debt_name() -> None:
+    """Debt observations store exact Decimal balances under the chosen debt name."""
+    service = FakeProgressService()
+
+    result, output = run_with_inputs(
+        plan_progress.record_debt_balance_action,
+        service,
+        [
+            "invalid",
+            "2",
+            "02/30/2026",
+            "07/24/2026",
+            "not money",
+            "-1.00",
+            "$1,245.67",
+            "Statement balance",
+            "",
+        ],
+    )
+
+    assert result is False
+    assert "Warning: Please choose one of: 1, 2, 3." in output
+    assert "Warning: Enter a valid date in MM/DD/YYYY format." in output
+    assert output.count("Warning: Enter a valid balance of $0.00 or greater.") == 2
+    assert service.balance_observation_calls == [
+        {
+            "plan_id": 732,
+            "observation_date": date(2026, 7, 24),
+            "observation_type": ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            "balance": Decimal("1245.67"),
+            "source": "interactive",
+            "debt_identifier": "Card B",
+            "note": "Statement balance",
+        }
+    ]
+    text = output_text(output)
+    assert "Success: Debt Balance recorded." in text
+    assert "Debt: Card B" in text
+    assert "Date: 07/24/2026" in text
+    assert "Balance: $1,245.67" in text
+    assert "732" not in text
+    assert "902" not in text
+
+
+def test_savings_balance_accepts_zero_and_optional_note() -> None:
+    """A plan-level savings observation accepts the service-supported zero balance."""
+    service = FakeProgressService()
+
+    _, output = run_with_inputs(
+        plan_progress.record_savings_balance_action,
+        service,
+        ["07/24/2026", "0", "", ""],
+    )
+
+    call = service.balance_observation_calls[0]
+    assert call == {
+        "plan_id": 732,
+        "observation_date": date(2026, 7, 24),
+        "observation_type": ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+        "balance": Decimal("0.00"),
+        "source": "interactive",
+        "debt_identifier": None,
+        "note": "",
+    }
+    assert "Success: Savings Balance recorded." in output
+    assert "Balance: $0.00" in output
+
+
+def test_debt_balance_accepts_exact_zero() -> None:
+    """A paid-off debt can be observed at the service-supported zero balance."""
+    service = FakeProgressService()
+
+    run_with_inputs(
+        plan_progress.record_debt_balance_action,
+        service,
+        ["1", "07/24/2026", "0.00", "", ""],
+    )
+
+    call = service.balance_observation_calls[0]
+    assert call["balance"] == Decimal("0.00")
+    assert call["debt_identifier"] == "Card A"
+
+
+def test_savings_balance_reprompts_invalid_date_and_negative_balance() -> None:
+    """Savings observations reject malformed dates and negative balances."""
+    service = FakeProgressService()
+
+    _, output = run_with_inputs(
+        plan_progress.record_savings_balance_action,
+        service,
+        ["bad date", "07/25/2026", "-0.01", "2,000.00", "Current total", ""],
+    )
+
+    assert "Warning: Enter a valid date in MM/DD/YYYY format." in output
+    assert "Warning: Enter a valid balance of $0.00 or greater." in output
+    assert service.balance_observation_calls[0]["balance"] == Decimal("2000.00")
+    assert service.balance_observation_calls[0]["note"] == "Current total"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        plan_progress.record_debt_balance_action,
+        plan_progress.record_savings_balance_action,
+    ],
+)
+def test_balance_date_defaults_to_today(action, monkeypatch) -> None:
+    """Blank observation dates use the same deterministic today seam."""
+    service = FakeProgressService()
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 24)
+
+    monkeypatch.setattr(plan_progress, "date", FixedDate)
+    leading = ["1"] if action is plan_progress.record_debt_balance_action else []
+    run_with_inputs(action, service, [*leading, "", "10.00", "", ""])
+
+    assert service.balance_observation_calls[0]["observation_date"] == date(
+        2026,
+        7,
+        24,
+    )
+
+
+def test_debt_balance_handles_no_debts() -> None:
+    """A debt-free saved plan returns without creating an observation."""
+    service = FakeProgressService()
+    replace_snapshot_collection(service, "debts", [])
+
+    _, output = run_with_inputs(
+        plan_progress.record_debt_balance_action,
+        service,
+        [],
+    )
+
+    assert "Warning: No debts are available for this plan." in output
+    assert "Warning: Debt Balance cancelled." in output
+    assert service.balance_observation_calls == []
+
+
+def test_debt_balance_handles_malformed_saved_debt(monkeypatch) -> None:
+    """Malformed debt names are reported without exposing immutable-version IDs."""
+    service = FakeProgressService()
+    monkeypatch.setattr(
+        plan_progress,
+        "_latest_plan_config",
+        lambda *_args: SimpleNamespace(debts=[SimpleNamespace(name=None)]),
+    )
+
+    _, output = run_with_inputs(
+        plan_progress.record_debt_balance_action,
+        service,
+        [""],
+    )
+
+    assert (
+        "Error: The latest saved plan contains a debt without a usable name."
+        in output
+    )
+    assert service.balance_observation_calls == []
+
+
+@pytest.mark.parametrize(
+    ("action", "inputs", "message"),
+    [
+        (
+            plan_progress.record_debt_balance_action,
+            ["3"],
+            "Warning: Debt Balance cancelled.",
+        ),
+        (
+            plan_progress.record_savings_balance_action,
+            ["cancel"],
+            "Warning: Savings Balance cancelled.",
+        ),
+        (
+            plan_progress.record_savings_balance_action,
+            ["07/24/2026", "cancel"],
+            "Warning: Savings Balance cancelled.",
+        ),
+        (
+            plan_progress.record_savings_balance_action,
+            ["07/24/2026", "50.00", "cancel"],
+            "Warning: Savings Balance cancelled.",
+        ),
+    ],
+)
+def test_balance_cancellation_never_persists(action, inputs, message) -> None:
+    """Entity, date, amount, and note cancellation points are write-free."""
+    service = FakeProgressService()
+
+    _, output = run_with_inputs(action, service, inputs)
+
+    assert message in output
+    assert service.balance_observation_calls == []
+
+
+@pytest.mark.parametrize(
+    "action_inputs",
+    [
+        (
+            plan_progress.record_debt_balance_action,
+            ["1", "07/24/2026", "100.00", "", ""],
+        ),
+        (
+            plan_progress.record_savings_balance_action,
+            ["07/24/2026", "100.00", "", ""],
+        ),
+    ],
+)
+def test_balance_actions_handle_service_failure(action_inputs) -> None:
+    """Expected persistence failures show errors and never claim success."""
+    action, inputs = action_inputs
+    service = FakeProgressService()
+    service.error_method = "add_balance_observation"
+
+    _, output = run_with_inputs(action, service, inputs)
+
+    assert "Error: add_balance_observation failed" in output
+    assert not any(line.startswith("Success:") for line in output)
+
+
+def test_record_balance_handles_stale_selected_plan() -> None:
+    """A stale selected plan returns safely before showing balance choices."""
+    service = FakeProgressService()
+    output = []
+
+    result = plan_progress.run_record_balance_menu(
+        service,
+        SimpleNamespace(id=9999, name="Missing"),
+        input_func=lambda _prompt: "",
+        output_func=output.append,
+    )
+
+    assert result is False
+    assert "Error: selected plan was not found." in output
+    assert "9999" not in output_text(output)
+    assert service.balance_observation_calls == []
+
+
+def test_record_balance_handles_missing_latest_version() -> None:
+    """A selected plan without versions cannot receive an observation."""
+    service = FakeProgressService()
+    service.plan.current_version_id = None
+    service.versions = []
+
+    _, output = run_with_inputs(
+        plan_progress.run_record_balance_menu,
+        service,
+        [""],
+    )
+
+    assert "Error: selected plan does not have any saved versions." in output
+    assert service.balance_observation_calls == []
+
+
+def test_balance_observation_isolated_to_selected_plan_and_latest_version() -> None:
+    """Savings recording resolves the selected plan's latest version internally."""
+    service = FakeProgressService()
+
+    run_with_inputs(
+        plan_progress.record_savings_balance_action,
+        service,
+        ["07/24/2026", "1500.00", "", ""],
+    )
+
+    assert ("get_plan_version", 902) in service.calls
+    assert service.balance_observation_calls[0]["plan_id"] == service.plan.id
+    assert service.balance_observation_calls[0]["debt_identifier"] is None
+
+
+def test_balance_menu_returns_after_success_cancellation_and_failure() -> None:
+    """Handled balance outcomes redisplay the submenu and keep navigation alive."""
+    service = FakeProgressService()
+    values = iter(
+        [
+            "2",
+            "07/24/2026",
+            "100.00",
+            "",
+            "",
+            "2",
+            "cancel",
+            "2",
+            "07/24/2026",
+            "200.00",
+            "",
+            "",
+            "3",
+        ]
+    )
+    output = []
+    original_add = service.add_balance_observation
+    call_count = 0
+
+    def fail_third_call(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise ValueError("balance save failed")
+        return original_add(*args, **kwargs)
+
+    service.add_balance_observation = fail_third_call
+    plan_progress.run_record_balance_menu(
+        service,
+        service.plan,
+        input_func=lambda _prompt: next(values),
+        output_func=output.append,
+    )
+
+    assert "Success: Savings Balance recorded." in output
+    assert "Warning: Savings Balance cancelled." in output
+    assert "Error: balance save failed" in output
+    assert output.count("Record Balance") == 4
+
+
+def test_recorded_balance_refreshes_progress_summary() -> None:
+    """The summary reloads persisted observations instead of using cached state."""
+    service = FakeProgressService()
+    service.actual_entries = []
+    service.observations = []
+
+    run_with_inputs(
+        plan_progress.record_savings_balance_action,
+        service,
+        ["07/24/2026", "1500.00", "", ""],
+    )
+    _, output = run_with_inputs(
+        plan_progress.show_progress_summary,
+        service,
+        [""],
+    )
+
+    text = output_text(output)
+    assert "Balance observations" in text
     assert "1" in text
     assert "On track" in text

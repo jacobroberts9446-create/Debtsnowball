@@ -1,4 +1,4 @@
-"""Interactive progress views and activity recording for one saved plan."""
+"""Interactive progress views and recording workflows for one saved plan."""
 
 from datetime import date
 from decimal import Decimal
@@ -30,11 +30,14 @@ from app.workflows.workbook_export import config_from_plan_version, latest_plan_
 __all__ = [
     "record_adjustment_action",
     "record_bill_payment_action",
+    "record_debt_balance_action",
     "record_debt_payment_action",
     "record_income_action",
     "record_personal_spending_action",
+    "record_savings_balance_action",
     "record_savings_deposit_action",
     "run_record_activity_menu",
+    "run_record_balance_menu",
     "run_plan_progress_menu",
     "show_forecast_vs_actual",
     "show_progress_summary",
@@ -49,7 +52,7 @@ def run_plan_progress_menu(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
 ) -> bool:
-    """Open read-only progress actions for one selected saved plan."""
+    """Open progress views and recording actions for one selected saved plan."""
     try:
         current_plan = service.get_plan(plan.id)
     except EXPECTED_SERVICE_ERRORS as exc:
@@ -88,7 +91,17 @@ def run_plan_progress_menu(
                 output_func,
             ),
         ),
-        MenuOption("4", "Back", lambda: True),
+        MenuOption(
+            "4",
+            "Record Balance",
+            lambda: run_record_balance_menu(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("5", "Back", lambda: True),
     ]
     run_menu(
         title=f"Track Progress - {display_plan_name(current_plan)}",
@@ -183,6 +196,105 @@ def run_record_activity_menu(
         output_func=output_func,
     )
     return False
+
+
+def run_record_balance_menu(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Open supported balance-observation actions for one selected plan."""
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    options = [
+        MenuOption(
+            "1",
+            "Debt Balance",
+            lambda: record_debt_balance_action(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "2",
+            "Savings Balance",
+            lambda: record_savings_balance_action(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption("3", "Back", lambda: True),
+    ]
+    run_menu(
+        title="Record Balance",
+        options=options,
+        input_func=input_func,
+        output_func=output_func,
+    )
+    return False
+
+
+def record_debt_balance_action(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Record the current balance for a numbered saved debt."""
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+        config = _latest_plan_config(service, current_plan)
+        selected = _select_named_entity(
+            config.debts,
+            "debt",
+            input_func,
+            output_func,
+        )
+        if selected is None:
+            print_warning("Debt Balance cancelled.", output_func)
+            return False
+        debt_name = selected.name.strip()
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    return _record_balance(
+        service,
+        current_plan,
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        "Debt Balance",
+        input_func,
+        output_func,
+        debt_name=debt_name,
+    )
+
+
+def record_savings_balance_action(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Record the current plan-level savings balance."""
+    return _record_balance(
+        service,
+        plan,
+        ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+        "Savings Balance",
+        input_func,
+        output_func,
+    )
 
 
 def record_income_action(
@@ -412,6 +524,48 @@ class _ActivityCancelled(Exception):
     """Signal cancellation before an activity is persisted."""
 
 
+def _record_balance(
+    service: PlanHistoryService,
+    plan: Any,
+    observation_type: ActualEntryType,
+    label: str,
+    input_func: InputFunc,
+    output_func: OutputFunc,
+    *,
+    debt_name: str | None = None,
+) -> bool:
+    """Collect and persist a nonnegative balance through the history service."""
+    try:
+        current_plan = _current_plan_with_version(service, plan)
+        observation_date = _prompt_balance_date(input_func, output_func)
+        balance = _prompt_balance_amount(input_func, output_func)
+        note = _prompt_optional_note(input_func)
+        service.add_balance_observation(
+            current_plan.id,
+            observation_date,
+            observation_type,
+            balance,
+            source="interactive",
+            debt_identifier=debt_name,
+            note=note,
+        )
+    except _ActivityCancelled:
+        print_warning(f"{label} cancelled.", output_func)
+        return False
+    except EXPECTED_SERVICE_ERRORS as exc:
+        print_error(str(exc), output_func)
+        wait_for_enter(input_func)
+        return False
+
+    print_success(f"{label} recorded.", output_func)
+    if debt_name is not None:
+        output_func(f"Debt: {debt_name}")
+    output_func(f"Date: {observation_date:%m/%d/%Y}")
+    output_func(f"Balance: {format_currency(balance)}")
+    wait_for_enter(input_func)
+    return False
+
+
 def _record_named_activity(
     service: PlanHistoryService,
     plan: Any,
@@ -583,6 +737,41 @@ def _prompt_activity_date(
             return parse_first_paycheck_date(raw_value)
         except ValueError:
             print_warning("Enter a valid date in MM/DD/YYYY format.", output_func)
+
+
+def _prompt_balance_date(
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> date:
+    """Prompt for an observation date, defaulting a blank value to today."""
+    while True:
+        raw_value = input_func(
+            "Observation date (MM/DD/YYYY, Enter for today, or 'cancel'): "
+        ).strip()
+        _raise_if_cancelled(raw_value)
+        if not raw_value:
+            return date.today()
+        try:
+            return parse_first_paycheck_date(raw_value)
+        except ValueError:
+            print_warning("Enter a valid date in MM/DD/YYYY format.", output_func)
+
+
+def _prompt_balance_amount(
+    input_func: InputFunc,
+    output_func: OutputFunc,
+) -> Decimal:
+    """Prompt for a nonnegative current balance."""
+    while True:
+        raw_value = input_func("Current balance in USD (or 'cancel'): ").strip()
+        _raise_if_cancelled(raw_value)
+        try:
+            return parse_nonnegative_money(raw_value)
+        except ValueError:
+            print_warning(
+                "Enter a valid balance of $0.00 or greater.",
+                output_func,
+            )
 
 
 def _prompt_activity_amount(

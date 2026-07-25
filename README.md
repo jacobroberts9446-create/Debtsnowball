@@ -572,6 +572,10 @@ saved versions. Open `Saved Plans`, choose a plan by name, then choose
 and records income, bill payments, debt payments, savings deposits, personal
 spending, and signed adjustments without requiring database IDs.
 
+Use `Record Balance` under `Track Progress` to record a current debt balance by
+debt name or the plan's current savings balance. Balance observations are kept
+separate from payments and deposits.
+
 Optional history features include:
 
 - Named plans with immutable versions.
