@@ -254,6 +254,37 @@ def test_plan_comparison_reports_tradeoffs_and_first_difference(tmp_path):
     assert "better" not in comparison.explanation.casefold()
 
 
+def test_plan_comparison_accepts_null_savings_plan_snapshots(tmp_path):
+    """Interactive config snapshots with no savings plan remain comparable."""
+    service = PlanHistoryService(tmp_path / "history.sqlite")
+    config = Config().load("config.json")
+    config.savings_plan = None
+    summaries, forecast = short_plan(config)
+
+    first = service.save_generated_plan(
+        name="Interactive Plan",
+        config=config,
+        forecast=forecast,
+        starting_savings=config.settings.starting_savings,
+        starting_debts=config.debts,
+        pay_period_summaries=summaries,
+    )
+    second = service.save_generated_plan(
+        name="",
+        plan_id=first.plan.id,
+        config=config,
+        forecast=forecast,
+        starting_savings=config.settings.starting_savings,
+        starting_debts=config.debts,
+        pay_period_summaries=summaries,
+        force=True,
+    )
+
+    comparison = service.compare_plan_versions(first.version.id, second.version.id)
+
+    assert comparison.deadline_priority_changed is False
+
+
 def test_export_import_json_and_csv_preserve_money_strings_and_duplicate_protection(tmp_path):
     service = PlanHistoryService(tmp_path / "source.sqlite")
     config = Config().load("config.json")

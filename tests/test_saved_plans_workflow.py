@@ -283,7 +283,7 @@ def test_saved_plan_selection_opens_plan_details_actions() -> None:
     assert "1. View Latest Plan Summary" in text
     assert "2. Generate Excel Workbook" in text
     assert "3. Create New Version" in text
-    assert "4. View History" in text
+    assert "4. History" in text
     assert "5. Rename Plan" in text
     assert "6. Duplicate Plan" in text
     assert "7. Delete Plan" in text
@@ -291,7 +291,7 @@ def test_saved_plan_selection_opens_plan_details_actions() -> None:
     assert preferences.marked[0] == (4, "Current Plan")
 
 
-def test_saved_plan_history_action_is_dispatched_for_selected_plan() -> None:
+def test_saved_plan_history_action_is_dispatched_for_selected_plan(monkeypatch) -> None:
     """Selected-plan history is delegated without asking for the plan ID again."""
     prompts = []
     choices = iter(["1", "4", "", "8", "2"])
@@ -308,12 +308,16 @@ def test_saved_plan_history_action_is_dispatched_for_selected_plan() -> None:
         input_func("Press Enter to continue...")
         return False
 
+    monkeypatch.setattr(
+        saved_plans,
+        "run_selected_plan_history_menu",
+        fake_history_action,
+    )
     saved_plans.run_saved_plans_menu(
         plan_history_service_factory=lambda: service,
         preferences_factory=lambda: preferences,
         input_func=lambda prompt: prompts.append(prompt) or next(choices),
         output_func=output.append,
-        selected_plan_history_action=fake_history_action,
     )
 
     assert calls == [(service, preferences, 7)]

@@ -1,7 +1,6 @@
 """Saved-plan interactive workflow actions."""
 
 from collections.abc import Callable
-from datetime import datetime
 from typing import Any
 
 from app.bill_input import collect_bills
@@ -21,6 +20,12 @@ from app.preferences import RecentPlanPreferences
 from app.plan_generation import generate_plan_from_setup
 from app.plan_setup import collect_setup_debts
 from app.savings_setup import prompt_savings_strategy
+from app.workflows.plan_history import run_selected_plan_history_menu
+from app.workflows.plan_presenter import (
+    display_plan_name,
+    format_saved_datetime,
+    version_count_label,
+)
 from app.workflows.workbook_export import (
     build_workbook_outputs,
     config_from_plan_version,
@@ -278,7 +283,9 @@ def run_selected_plan_menu(
     setup_from_generated_plan_func: SetupFromGeneratedPlan | None = None,
 ) -> None:
     """Open details and implemented actions for one selected plan."""
-    selected_plan_history_action = selected_plan_history_action or _missing_history_action
+    selected_plan_history_action = (
+        selected_plan_history_action or run_selected_plan_history_menu
+    )
     options = [
         MenuOption(
             "1",
@@ -315,7 +322,7 @@ def run_selected_plan_menu(
         ),
         MenuOption(
             "4",
-            "View History",
+            "History",
             lambda: selected_plan_history_action(
                 service,
                 preferences,
@@ -672,34 +679,9 @@ def save_current_plan_action(
     return False
 
 
-def version_count_label(service: PlanHistoryService, plan) -> str:
-    """Return a displayable version count when available."""
-    try:
-        return str(len(service.list_plan_versions(plan.id)))
-    except (FileNotFoundError, ValueError):
-        return "Unknown"
-
-
-def display_plan_name(plan) -> str:
-    """Return the best user-facing saved-plan name available."""
-    name = getattr(plan, "name", "") or ""
-    return name.strip() or "Untitled Plan"
-
-
 def plan_updated_at(plan) -> str:
     """Return the best available saved-plan update timestamp."""
     return getattr(plan, "updated_at", "") or getattr(plan, "created_at", "")
-
-
-def format_saved_datetime(value: str | None) -> str:
-    """Format saved-plan timestamps for console display."""
-    if not value:
-        return "Not available"
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    return f"{parsed:%b} {parsed.day}, {parsed:%Y at %I:%M %p}".replace(" 0", " ")
 
 
 def valid_choice_label(plan_count: int) -> str:

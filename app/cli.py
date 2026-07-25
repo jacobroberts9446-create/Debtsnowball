@@ -234,7 +234,8 @@ def run_actual_command(
 def _default_dependencies() -> CliDependencies:
     """Build default CLI dependencies without importing run.py at module import time."""
     from app.workflows.saved_plans import save_current_plan
-    from run import load_current_config, print_plan_comparison
+    from app.workflows.plan_history import print_plan_comparison
+    from run import load_current_config
 
     return CliDependencies(
         load_current_config=load_current_config,

@@ -382,7 +382,11 @@ def test_menu_help_explains_options_and_returns_to_menu() -> None:
     assert "Create New Plan: starts the guided interactive setup workflow." in output
     assert "Generate Plan From Config" not in output
     assert "Saved Plans: opens separate scenarios or people's saved plans." in output
-    assert "History: select a saved plan, then view its prior versions." in output
+    assert (
+        "Saved Plan History: select a plan in Saved Plans to view prior versions."
+        in output
+    )
+    assert not any(line.startswith("History:") for line in output)
     assert "Help: explains the menu options." in output
     assert "Exit: closes DebtSnowball without generating a plan." in output
     assert "Press Enter to continue..." in prompts

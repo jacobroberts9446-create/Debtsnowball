@@ -301,9 +301,11 @@ class HistoryComparisonService:
         later = json.loads(
             self.repository.get_plan_version(later_version_id).config_snapshot
         )
+        earlier_savings_plan = earlier.get("savings_plan") or {}
+        later_savings_plan = later.get("savings_plan") or {}
         return (
-            earlier.get("savings_plan", {}).get("deadline_priority_enabled")
-            != later.get("savings_plan", {}).get("deadline_priority_enabled")
+            earlier_savings_plan.get("deadline_priority_enabled")
+            != later_savings_plan.get("deadline_priority_enabled")
         )
 
     def comparison_explanation(
