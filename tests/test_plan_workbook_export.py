@@ -144,10 +144,10 @@ def test_generate_budget_plan_prints_full_workbook_path(monkeypatch) -> None:
 
     text = output_text([str(item) for item in output])
     assert "Success: Excel workbook created:" in text
-    assert (
-        "C:\\Users\\Test\\AppData\\Local\\DebtPilot\\output\\debtpilot_plan.xlsx"
-        in text
+    expected_path = (
+        "C:/Users/Test/AppData/Local/DebtPilot/output/debtpilot_plan.xlsx"
     )
+    assert expected_path.replace("\\", "/") in text.replace("\\", "/")
 
 
 def test_generate_budget_plan_prints_detailed_pay_period_summary(monkeypatch) -> None:
