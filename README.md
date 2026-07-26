@@ -28,7 +28,18 @@ console application.
 
 ## Quick Start
 
-### Run from source
+### Windows Installer (Recommended)
+
+Most users should install DebtPilot from the
+[GitHub Releases page](https://github.com/jacobroberts9446-create/Debtsnowball/releases).
+
+1. Download `DebtPilot-Setup-1.2.0.exe`.
+2. Run the installer.
+3. Open **DebtPilot** from the Start Menu.
+
+Python is not required when using the installer.
+
+### Run from Source
 
 Requirements:
 
@@ -204,7 +215,9 @@ financial values as exact `Decimal` objects internally.
 
 ### Installer
 
-Download and run `DebtPilot-Setup-1.2.0.exe`. The installer:
+Download `DebtPilot-Setup-1.2.0.exe` from the
+[GitHub Releases page](https://github.com/jacobroberts9446-create/Debtsnowball/releases)
+and run it. The installer:
 
 - installs for the current Windows user without administrator privileges;
 - creates a Start Menu shortcut;
