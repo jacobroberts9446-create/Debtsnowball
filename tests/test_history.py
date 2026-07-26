@@ -70,6 +70,15 @@ def history_plan_for_config(service, config, name):
     return plan
 
 
+def activity_association(entry_type, config):
+    """Return required persisted bill/debt associations for an activity type."""
+    if entry_type == ActualEntryType.BILL_PAID:
+        return {"category": config.bills[0].name}
+    if entry_type == ActualEntryType.DEBT_PAYMENT:
+        return {"debt_identifier": config.debts[0].name}
+    return {}
+
+
 def exported_plan_payload(tmp_path, *, name="Tamper Plan"):
     service = PlanHistoryService(tmp_path / f"{name.replace(' ', '_')}.sqlite")
     config = Config().load("config.json")
@@ -238,6 +247,7 @@ def test_actual_entries_reverse_and_compare_without_moralizing(tmp_path):
         date(2026, 7, 17),
         ActualEntryType.DEBT_PAYMENT,
         Decimal("1253.00"),
+        debt_identifier=config.debts[0].name,
     )
     reversal = service.reverse_actual_entry(income.id)
     comparison = service.compare_forecast_to_actual(plan.id)
@@ -277,6 +287,220 @@ def test_actual_entries_reverse_and_compare_without_moralizing(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("entry_type", "amount", "category", "debt_identifier", "message"),
+    [
+        (ActualEntryType.INCOME_RECEIVED, "0.00", "", None, "greater than"),
+        (ActualEntryType.SAVINGS_DEPOSIT, "-0.01", "", None, "greater than"),
+        (ActualEntryType.ADJUSTMENT, "0.00", "", None, "nonzero"),
+        (ActualEntryType.DEBT_PAYMENT, "10.00", "", None, "requires a debt name"),
+        (ActualEntryType.BILL_PAID, "10.00", "", None, "requires a bill name"),
+        (
+            ActualEntryType.INCOME_RECEIVED,
+            "10.00",
+            "",
+            "Card A",
+            "only debt payments",
+        ),
+        (ActualEntryType.INCOME_RECEIVED, "NaN", "", None, "finite"),
+        (ActualEntryType.INCOME_RECEIVED, "Infinity", "", None, "finite"),
+    ],
+)
+def test_direct_actual_entry_validation_rejects_invalid_persistence(
+    tmp_path,
+    entry_type,
+    amount,
+    category,
+    debt_identifier,
+    message,
+):
+    service = PlanHistoryService(tmp_path / "actual-validation.sqlite")
+    plan = service.create_plan("Actual Validation", Config().load("config.json"))
+
+    with pytest.raises(ValueError, match=message):
+        service.add_actual_entry(
+            plan.id,
+            date(2026, 7, 17),
+            entry_type,
+            amount,
+            category=category,
+            debt_identifier=debt_identifier,
+        )
+
+    assert service.list_actual_entries(plan.id) == []
+
+
+def test_direct_debt_activity_requires_name_from_active_plan(tmp_path):
+    service = PlanHistoryService(tmp_path / "actual-debt-name.sqlite")
+    plan = service.create_plan("Actual Debt Name", Config().load("config.json"))
+
+    with pytest.raises(ValueError, match="not present in the active saved plan"):
+        service.add_actual_entry(
+            plan.id,
+            date(2026, 7, 17),
+            ActualEntryType.DEBT_PAYMENT,
+            Decimal("10.00"),
+            debt_identifier="Unknown Debt",
+        )
+
+
+def test_direct_actual_entry_normalizes_money_and_associations(tmp_path):
+    service = PlanHistoryService(tmp_path / "actual-normalization.sqlite")
+    plan = service.create_plan("Actual Normalization", Config().load("config.json"))
+
+    bill = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 17),
+        ActualEntryType.BILL_PAID,
+        "10.005",
+        category="  Electric  ",
+    )
+    debt = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 17),
+        ActualEntryType.DEBT_PAYMENT,
+        "20.004",
+        debt_identifier="  Citi  ",
+    )
+    adjustment = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 17),
+        ActualEntryType.ADJUSTMENT,
+        "-2.345",
+    )
+
+    assert bill.amount == Decimal("10.01")
+    assert bill.category == "Electric"
+    assert debt.amount == Decimal("20.00")
+    assert debt.debt_identifier == "Citi"
+    assert adjustment.amount == Decimal("-2.35")
+
+
+@pytest.mark.parametrize(
+    ("observation_type", "balance", "debt_identifier", "message"),
+    [
+        (
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            "-0.01",
+            "Citi",
+            "cannot be negative",
+        ),
+        (
+            ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+            "-0.01",
+            None,
+            "cannot be negative",
+        ),
+        (
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            "10.00",
+            None,
+            "requires a debt name",
+        ),
+        (
+            ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+            "10.00",
+            "Citi",
+            "cannot use a debt name",
+        ),
+        (
+            ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+            "NaN",
+            None,
+            "finite",
+        ),
+    ],
+)
+def test_direct_balance_observation_validation_rejects_invalid_persistence(
+    tmp_path,
+    observation_type,
+    balance,
+    debt_identifier,
+    message,
+):
+    service = PlanHistoryService(tmp_path / "balance-validation.sqlite")
+    plan = service.create_plan("Balance Validation", Config().load("config.json"))
+
+    with pytest.raises(ValueError, match=message):
+        service.add_balance_observation(
+            plan.id,
+            date(2026, 7, 17),
+            observation_type,
+            balance,
+            debt_identifier=debt_identifier,
+        )
+
+    assert service.list_balance_observations(plan.id) == []
+
+
+def test_direct_debt_balance_requires_name_from_active_plan(tmp_path):
+    service = PlanHistoryService(tmp_path / "balance-debt-name.sqlite")
+    plan = service.create_plan("Balance Debt Name", Config().load("config.json"))
+
+    with pytest.raises(ValueError, match="not present in the active saved plan"):
+        service.add_balance_observation(
+            plan.id,
+            date(2026, 7, 17),
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            Decimal("10.00"),
+            debt_identifier="Unknown Debt",
+        )
+
+
+def test_balance_observation_allows_zero_and_normalizes_fields(tmp_path):
+    service = PlanHistoryService(tmp_path / "balance-normalization.sqlite")
+    plan = service.create_plan("Balance Normalization", Config().load("config.json"))
+
+    observation = service.add_balance_observation(
+        plan.id,
+        date(2026, 7, 17),
+        ActualEntryType.DEBT_BALANCE_OBSERVATION,
+        "-0.00",
+        debt_identifier="  Citi  ",
+        source="  direct  ",
+        note="  Paid off  ",
+    )
+
+    assert observation.balance == Decimal("0.00")
+    assert observation.debt_identifier == "Citi"
+    assert observation.source == "direct"
+    assert observation.note == "Paid off"
+
+
+def test_actual_entry_rejects_balance_observation_types(tmp_path):
+    service = PlanHistoryService(tmp_path / "wrong-entry-type.sqlite")
+    plan = service.create_plan("Wrong Entry Type", Config().load("config.json"))
+
+    with pytest.raises(ValueError, match="add_balance_observation"):
+        service.add_actual_entry(
+            plan.id,
+            date(2026, 7, 17),
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            Decimal("10.00"),
+        )
+
+
+def test_comparisons_reject_active_version_without_forecast(tmp_path):
+    service = PlanHistoryService(tmp_path / "missing-forecast.sqlite")
+    plan = service.create_plan("Missing Forecast", Config().load("config.json"))
+    service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 17),
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("100.00"),
+    )
+
+    message = "No forecast is available for the active version."
+    with pytest.raises(ValueError, match=message):
+        service.compare_forecast_to_actual(plan.id)
+    with pytest.raises(ValueError, match=message):
+        service.compare_forecast_to_actual_periods(plan.id)
+    with pytest.raises(ValueError, match=message):
+        service.history_report_rows(plan.id)
+    with pytest.raises(ValueError, match=message):
+        service.export_csv_bundle(plan.id, tmp_path / "missing-forecast-export")
+
+
+@pytest.mark.parametrize(
     ("adjustment", "expected_remaining"),
     [
         (Decimal("12.34"), Decimal("12.34")),
@@ -289,8 +513,7 @@ def test_aggregate_signed_adjustments_change_remaining_cash(
     expected_remaining,
 ):
     service = PlanHistoryService(tmp_path / "adjustment-summary.sqlite")
-    config = Config().load("config.json")
-    plan = service.create_plan("Adjustment Summary", config)
+    config, plan = history_plan_with_forecast(service, "Adjustment Summary")
     service.add_actual_entry(
         plan.id,
         config.settings.first_paycheck,
@@ -305,8 +528,7 @@ def test_aggregate_signed_adjustments_change_remaining_cash(
 
 def test_aggregate_savings_withdrawal_reduces_net_savings_and_releases_cash(tmp_path):
     service = PlanHistoryService(tmp_path / "withdrawal-summary.sqlite")
-    config = Config().load("config.json")
-    plan = service.create_plan("Withdrawal Summary", config)
+    config, plan = history_plan_with_forecast(service, "Withdrawal Summary")
     service.add_actual_entry(
         plan.id,
         config.settings.first_paycheck,
@@ -328,8 +550,7 @@ def test_aggregate_savings_withdrawal_reduces_net_savings_and_releases_cash(tmp_
 
 def test_aggregate_mixed_activity_uses_exact_decimal_cash_flow(tmp_path):
     service = PlanHistoryService(tmp_path / "mixed-summary.sqlite")
-    config = Config().load("config.json")
-    plan = service.create_plan("Mixed Summary", config)
+    config, plan = history_plan_with_forecast(service, "Mixed Summary")
     activity = [
         (ActualEntryType.INCOME_RECEIVED, Decimal("2000.10")),
         (ActualEntryType.BILL_PAID, Decimal("500.05")),
@@ -346,6 +567,7 @@ def test_aggregate_mixed_activity_uses_exact_decimal_cash_flow(tmp_path):
             config.settings.first_paycheck,
             entry_type,
             amount,
+            **activity_association(entry_type, config),
         )
 
     comparison = service.compare_forecast_to_actual(plan.id)
@@ -372,7 +594,7 @@ def test_aggregate_completeness_requires_applicable_recorded_categories(tmp_path
         plan.id,
         config.settings.first_paycheck,
         ActualEntryType.INCOME_RECEIVED,
-        Decimal("0.00"),
+        Decimal("0.01"),
     )
 
     income_only = service.compare_forecast_to_actual(plan.id)
@@ -388,7 +610,8 @@ def test_aggregate_completeness_requires_applicable_recorded_categories(tmp_path
         plan.id,
         config.settings.first_paycheck,
         ActualEntryType.BILL_PAID,
-        Decimal("0.00"),
+        Decimal("0.01"),
+        category=config.bills[0].name,
     )
     income_and_bills = service.compare_forecast_to_actual(plan.id)
 
@@ -397,7 +620,7 @@ def test_aggregate_completeness_requires_applicable_recorded_categories(tmp_path
     assert income_and_bills.completeness.missing_categories == expected[2:]
 
 
-def test_all_applicable_zero_value_entries_count_as_complete(tmp_path):
+def test_all_applicable_positive_entries_count_as_complete(tmp_path):
     service = PlanHistoryService(tmp_path / "zero-completeness.sqlite")
     config, plan = history_plan_with_forecast(service, "Zero Completeness")
     for entry_type in (
@@ -411,7 +634,8 @@ def test_all_applicable_zero_value_entries_count_as_complete(tmp_path):
             plan.id,
             config.settings.first_paycheck,
             entry_type,
-            Decimal("0.00"),
+            Decimal("0.01"),
+            **activity_association(entry_type, config),
         )
 
     comparison = service.compare_forecast_to_actual(plan.id)
@@ -557,7 +781,7 @@ def test_atomic_actual_correction_preserves_rows_periods_and_totals(tmp_path):
 
 def test_atomic_correction_supports_associations_and_replacement_chains(tmp_path):
     service = PlanHistoryService(tmp_path / "chains.sqlite")
-    _, plan = history_plan_with_forecast(service)
+    config, plan = history_plan_with_forecast(service)
     bill = service.add_actual_entry(
         plan.id,
         date(2026, 7, 20),
@@ -589,7 +813,7 @@ def test_atomic_correction_supports_associations_and_replacement_chains(tmp_path
         ActualEntryType.DEBT_PAYMENT,
         Decimal("100.00"),
         category="Debt Payment",
-        debt_identifier="Card A",
+        debt_identifier=config.debts[0].name,
     )
     debt_result = service.correct_actual_entry(
         plan.id,
@@ -597,14 +821,14 @@ def test_atomic_correction_supports_associations_and_replacement_chains(tmp_path
         entry_date=debt.entry_date,
         amount=Decimal("125.00"),
         category="Debt Payment",
-        debt_identifier="Card B",
+        debt_identifier=config.debts[1].name,
         note="Correct card",
     )
 
     assert second.reversal.corrected_entry_id == first.replacement.id
     assert second.replacement.corrected_entry_id == first.replacement.id
     assert second.replacement.category == "Fiber Internet"
-    assert debt_result.replacement.debt_identifier == "Card B"
+    assert debt_result.replacement.debt_identifier == config.debts[1].name
     comparison = service.compare_forecast_to_actual(plan.id)
     assert comparison.actual_bills == Decimal("90.00")
     assert comparison.actual_debt_payments == Decimal("125.00")
@@ -662,7 +886,7 @@ def test_atomic_correction_rolls_back_both_rows_on_insert_failure(
 
 def test_atomic_correction_validates_targets_signs_and_associations(tmp_path):
     service = PlanHistoryService(tmp_path / "validation.sqlite")
-    _, plan = history_plan_with_forecast(service)
+    config, plan = history_plan_with_forecast(service)
     other_plan = service.create_plan("Other Correction Plan", Config().load("config.json"))
     original = service.add_actual_entry(
         plan.id,
@@ -694,6 +918,29 @@ def test_atomic_correction_validates_targets_signs_and_associations(tmp_path):
             plan.id,
             original.id,
             **{**base, "debt_identifier": "Card A"},
+        )
+    debt = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.DEBT_PAYMENT,
+        Decimal("25.00"),
+        debt_identifier=config.debts[0].name,
+    )
+    with pytest.raises(ValueError, match="not present in the active saved plan"):
+        service.correct_actual_entry(
+            plan.id,
+            debt.id,
+            entry_date=debt.entry_date,
+            amount=Decimal("30.00"),
+            category="",
+            debt_identifier="Unknown Debt",
+            note="",
+        )
+    with pytest.raises(ValueError, match="finite"):
+        service.correct_actual_entry(
+            plan.id,
+            original.id,
+            **{**base, "amount": Decimal("NaN")},
         )
 
     adjustment = service.add_actual_entry(
@@ -756,6 +1003,24 @@ def test_atomic_correction_rejects_reversal_and_superseded_targets(tmp_path):
         service.correct_actual_entry(plan.id, original.id, **replacement)
     with pytest.raises(ValueError, match="reversal entry"):
         service.correct_actual_entry(plan.id, result.reversal.id, **replacement)
+
+
+def test_reverse_actual_entry_validates_plan_id_and_note(tmp_path):
+    service = PlanHistoryService(tmp_path / "reverse-validation.sqlite")
+    _, plan = history_plan_with_forecast(service)
+    original = service.add_actual_entry(
+        plan.id,
+        date(2026, 7, 20),
+        ActualEntryType.INCOME_RECEIVED,
+        Decimal("100.00"),
+    )
+
+    with pytest.raises(ValueError, match="positive integer"):
+        service.reverse_actual_entry(original.id, plan_id=0)
+    with pytest.raises(ValueError, match="note must be text"):
+        service.reverse_actual_entry(original.id, plan_id=plan.id, note=None)
+
+    assert service.list_actual_entries(plan.id) == [original]
 
 
 def test_concurrent_atomic_corrections_allow_only_one_winner(tmp_path):
@@ -1135,6 +1400,7 @@ def test_actual_entries_and_observations_match_forecast_period_windows(tmp_path)
         date(2026, 7, 20),
         ActualEntryType.BILL_PAID,
         Decimal("100.00"),
+        category=config.bills[0].name,
     )
     first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
     debt_name = config.debts[0].name
@@ -1161,6 +1427,7 @@ def test_actual_entries_and_observations_match_forecast_period_windows(tmp_path)
         date(2026, 1, 1),
         ActualEntryType.BILL_PAID,
         Decimal("10.00"),
+        category=config.bills[0].name,
     )
     comparisons = service.compare_forecast_to_actual_periods(plan.id)
 
@@ -1304,24 +1571,21 @@ def test_debt_balance_observation_remains_visible_when_debt_no_longer_matches(
     assert result[0].status == "No matching debt in active forecast"
 
 
-def test_debt_balance_observation_does_not_guess_case_or_whitespace(tmp_path):
+def test_debt_balance_observation_does_not_guess_case(tmp_path):
     service = PlanHistoryService(tmp_path / "exact-debt-name.sqlite")
     config, plan = history_plan_with_forecast(service, "Exact Debt Name")
     first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
     entered_name = f" {config.debts[0].name.lower()} "
-    service.add_balance_observation(
-        plan.id,
-        first_period.pay_date,
-        ActualEntryType.DEBT_BALANCE_OBSERVATION,
-        Decimal("500.00"),
-        debt_identifier=entered_name,
-    )
+    with pytest.raises(ValueError, match="not present in the active saved plan"):
+        service.add_balance_observation(
+            plan.id,
+            first_period.pay_date,
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            Decimal("500.00"),
+            debt_identifier=entered_name,
+        )
 
-    result = service.compare_forecast_to_actual(plan.id).debt_balance_comparisons
-
-    assert result[0].debt_name == entered_name
-    assert result[0].planned_balance is None
-    assert result[0].status == "No matching debt in active forecast"
+    assert service.list_balance_observations(plan.id) == []
 
 
 def test_duplicate_forecast_debt_names_are_reported_as_ambiguous(tmp_path):
@@ -1389,12 +1653,14 @@ def test_progress_is_rematched_to_new_version_periods_without_mutating_history(t
         activity_date,
         ActualEntryType.BILL_PAID,
         Decimal("25.00"),
+        category=config.bills[0].name,
     )
     service.add_actual_entry(
         plan.id,
         date(2026, 8, 10),
         ActualEntryType.BILL_PAID,
         Decimal("15.00"),
+        category=config.bills[0].name,
     )
     debt_name = config.debts[0].name
     original_period = service.compare_forecast_to_actual_periods(plan.id)[1]
@@ -1498,6 +1764,7 @@ def test_progress_survives_multiple_versions_and_restored_version(tmp_path):
         pay_date,
         ActualEntryType.DEBT_PAYMENT,
         Decimal("75.00"),
+        debt_identifier=config.debts[0].name,
     )
     first_period = service.compare_forecast_to_actual_periods(plan.id)[0]
     debt_name = config.debts[0].name
@@ -1581,7 +1848,13 @@ def test_period_comparison_reports_complete_on_track_actuals(tmp_path):
         (ActualEntryType.PERSONAL_SPENDING, baseline_period.planned_personal_spending),
     ]
     for entry_type, amount in entries:
-        service.add_actual_entry(plan.id, baseline_period.pay_date, entry_type, amount)
+        service.add_actual_entry(
+            plan.id,
+            baseline_period.pay_date,
+            entry_type,
+            amount,
+            **activity_association(entry_type, config),
+        )
 
     complete_period = service.compare_forecast_to_actual_periods(plan.id)[0]
 
@@ -1612,6 +1885,7 @@ def test_period_comparison_includes_withdrawals_and_signed_adjustments(tmp_path)
             config.settings.first_paycheck,
             entry_type,
             amount,
+            **activity_association(entry_type, config),
         )
 
     comparison = service.compare_forecast_to_actual_periods(plan.id)[0]
@@ -1633,7 +1907,7 @@ def test_period_completeness_uses_applicable_categories_and_entry_presence(tmp_p
         plan.id,
         pay_date,
         ActualEntryType.INCOME_RECEIVED,
-        Decimal("0.00"),
+        Decimal("0.01"),
     )
     partial = service.compare_forecast_to_actual_periods(plan.id)[0]
 
@@ -1651,13 +1925,14 @@ def test_period_completeness_uses_applicable_categories_and_entry_presence(tmp_p
             plan.id,
             pay_date,
             entry_type,
-            Decimal("0.00"),
+            Decimal("0.01"),
+            **activity_association(entry_type, config),
         )
     complete = service.compare_forecast_to_actual_periods(plan.id)[0]
 
     assert complete.data_completeness == "complete"
     assert complete.status == "On track"
-    assert complete.actual_remaining_cash == Decimal("0.00")
+    assert complete.actual_remaining_cash == Decimal("-0.03")
 
 
 def test_period_completeness_does_not_require_zero_planned_categories(tmp_path):
@@ -1677,7 +1952,8 @@ def test_period_completeness_does_not_require_zero_planned_categories(tmp_path):
             plan.id,
             config.settings.first_paycheck,
             entry_type,
-            Decimal("0.00"),
+            Decimal("0.01"),
+            **activity_association(entry_type, config),
         )
 
     comparison = service.compare_forecast_to_actual_periods(plan.id)[0]

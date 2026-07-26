@@ -36,9 +36,9 @@ from app.workflows.workbook_export import (
 )
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     """Run the CLI entrypoint with DebtSnowball workflow callbacks."""
-    cli_main(
+    return cli_main(
         argv,
         interactive_runner=run_main_menu,
         dependencies=CliDependencies(
@@ -244,4 +244,4 @@ def savings_strategy_from_config(config: Config) -> SavingsStrategySelection:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

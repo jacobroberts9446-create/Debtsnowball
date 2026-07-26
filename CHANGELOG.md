@@ -17,6 +17,15 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Debt balance observations now compare with the matching active-forecast debt
   and remain separate when multiple debts are observed in one pay period.
+- Actual activity and balance observations now enforce financial and association
+  validation at the service boundary.
+- Progress and CLI comparisons now report when the active version has no forecast.
+- CLI command failures now return a nonzero process exit code.
+- Monthly paycheck schedules retain their original day or month-end anchor.
+
+### Changed
+- CI now runs tests, coverage, Ruff, compilation, CLI help, and a Windows
+  PyInstaller build for the development branch.
 
 ## [1.1.0] - Unreleased
 

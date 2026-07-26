@@ -3,6 +3,8 @@
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from app.calendar_engine import CalendarEngine
 
 
@@ -59,7 +61,7 @@ def test_weekly_generation_spans_months() -> None:
 
 
 def test_monthly_generation_clamps_to_shorter_months_and_spans_years() -> None:
-    """Monthly periods use real month lengths and clamp missing days."""
+    """Month-end schedules return to month end after a shorter February."""
     periods = CalendarEngine(settings(date(2026, 12, 31), "monthly")).generate(
         date(2027, 2, 28)
     )
@@ -67,7 +69,7 @@ def test_monthly_generation_clamps_to_shorter_months_and_spans_years() -> None:
     assert period_dates(periods) == [
         (date(2026, 12, 31), date(2026, 12, 31), date(2027, 1, 30)),
         (date(2027, 1, 31), date(2027, 1, 31), date(2027, 2, 27)),
-        (date(2027, 2, 28), date(2027, 2, 28), date(2027, 3, 27)),
+        (date(2027, 2, 28), date(2027, 2, 28), date(2027, 3, 30)),
     ]
 
 
@@ -79,8 +81,91 @@ def test_monthly_generation_handles_leap_year_february() -> None:
 
     assert period_dates(periods) == [
         (date(2028, 1, 31), date(2028, 1, 31), date(2028, 2, 28)),
-        (date(2028, 2, 29), date(2028, 2, 29), date(2028, 3, 28)),
+        (date(2028, 2, 29), date(2028, 2, 29), date(2028, 3, 30)),
     ]
+
+
+def test_monthly_january_31_preserves_month_end_non_leap_year() -> None:
+    """A January month-end anchor returns to month end after February."""
+    periods = CalendarEngine(settings(date(2027, 1, 31), "monthly")).generate(
+        date(2027, 4, 30)
+    )
+
+    assert [period.pay_date for period in periods] == [
+        date(2027, 1, 31),
+        date(2027, 2, 28),
+        date(2027, 3, 31),
+        date(2027, 4, 30),
+    ]
+
+
+def test_monthly_january_31_preserves_month_end_leap_year() -> None:
+    """A January month-end anchor uses leap day and later month ends."""
+    periods = CalendarEngine(settings(date(2028, 1, 31), "monthly")).generate(
+        date(2028, 4, 30)
+    )
+
+    assert [period.pay_date for period in periods] == [
+        date(2028, 1, 31),
+        date(2028, 2, 29),
+        date(2028, 3, 31),
+        date(2028, 4, 30),
+    ]
+
+
+def test_monthly_january_30_retains_day_after_february_clamp() -> None:
+    """A day-30 anchor returns to day 30 rather than drifting to day 28."""
+    periods = CalendarEngine(settings(date(2027, 1, 30), "monthly")).generate(
+        date(2027, 4, 30)
+    )
+
+    assert [period.pay_date for period in periods] == [
+        date(2027, 1, 30),
+        date(2027, 2, 28),
+        date(2027, 3, 30),
+        date(2027, 4, 30),
+    ]
+
+
+def test_monthly_january_29_retains_day_after_february_clamp() -> None:
+    """A day-29 anchor returns to day 29 after a non-leap February."""
+    periods = CalendarEngine(settings(date(2027, 1, 29), "monthly")).generate(
+        date(2027, 4, 29)
+    )
+
+    assert [period.pay_date for period in periods] == [
+        date(2027, 1, 29),
+        date(2027, 2, 28),
+        date(2027, 3, 29),
+        date(2027, 4, 29),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("first_paycheck", "expected"),
+    [
+        (
+            date(2027, 2, 28),
+            [date(2027, 2, 28), date(2027, 3, 31), date(2027, 4, 30)],
+        ),
+        (
+            date(2028, 2, 29),
+            [date(2028, 2, 29), date(2028, 3, 31), date(2028, 4, 30)],
+        ),
+        (
+            date(2027, 11, 15),
+            [date(2027, 11, 15), date(2027, 12, 15), date(2028, 1, 15)],
+        ),
+    ],
+)
+def test_monthly_anchors_cover_february_midmonth_and_year_boundary(
+    first_paycheck,
+    expected,
+) -> None:
+    """Monthly anchors remain deterministic across February and year boundaries."""
+    periods = CalendarEngine(settings(first_paycheck, "monthly")).generate(expected[-1])
+
+    assert [period.pay_date for period in periods] == expected
 
 
 def test_semimonthly_generation_uses_fifteenth_and_month_end() -> None:

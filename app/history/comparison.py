@@ -29,6 +29,7 @@ COMPLETENESS_CATEGORY_ORDER = (
     ActualEntryType.SAVINGS_DEPOSIT,
     ActualEntryType.PERSONAL_SPENDING,
 )
+NO_ACTIVE_FORECAST_MESSAGE = "No forecast is available for the active version."
 
 
 class HistoryComparisonService:
@@ -95,7 +96,7 @@ class HistoryComparisonService:
         """Compare actual entries to each persisted forecast period."""
         plan = self.repository.get_plan(plan_id)
         if plan.current_version_id is None:
-            return []
+            raise ValueError(NO_ACTIVE_FORECAST_MESSAGE)
         snapshot = self.active_plan_snapshot(plan.current_version_id)
         periods = self.repository.forecast_period_rows(snapshot.id)
         actual_by_period = self.actual_totals_by_period(plan_id, periods)
@@ -285,11 +286,14 @@ class HistoryComparisonService:
         try:
             return self.latest_snapshot_for_version(plan_version_id)
         except ValueError:
-            return self.repository.get_forecast_snapshot(
-                self.repository.latest_compatible_snapshot_id_for_version(
-                    plan_version_id
+            try:
+                return self.repository.get_forecast_snapshot(
+                    self.repository.latest_compatible_snapshot_id_for_version(
+                        plan_version_id
+                    )
                 )
-            )
+            except ValueError as exc:
+                raise ValueError(NO_ACTIVE_FORECAST_MESSAGE) from exc
 
     def payoff_order(self, snapshot_id: int) -> list[str]:
         """Return payoff order for a forecast snapshot."""
@@ -385,11 +389,8 @@ class HistoryComparisonService:
         """Return latest planned totals for one plan."""
         plan = self.repository.get_plan(plan_id)
         if plan.current_version_id is None:
-            return zero_totals()
-        try:
-            snapshot = self.active_plan_snapshot(plan.current_version_id)
-        except ValueError:
-            return zero_totals()
+            raise ValueError(NO_ACTIVE_FORECAST_MESSAGE)
+        snapshot = self.active_plan_snapshot(plan.current_version_id)
         fixed_expenses = self.sum_snapshot_column(snapshot.id, "fixed_expenses")
         personal_allowance = self.sum_snapshot_column(
             snapshot.id,

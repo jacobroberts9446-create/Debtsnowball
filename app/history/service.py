@@ -539,7 +539,35 @@ class PlanHistoryService:
     ) -> ActualTransaction:
         """Post an immutable actual financial activity entry."""
         entry_type = ActualEntryType(str(entry_type))
-        period_id, match_method = self._match_period_for_date(plan_id, entry_date)
+        if entry_type in {
+            ActualEntryType.DEBT_BALANCE_OBSERVATION,
+            ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
+        }:
+            raise ValueError("balance observations must use add_balance_observation().")
+        normalized = self._normalize_actual_entry(
+            entry_date=entry_date,
+            amount=amount,
+            category=category,
+            description=description,
+            source=source,
+            debt_identifier=debt_identifier,
+            note=note,
+        )
+        self._validate_actual_association(
+            entry_type,
+            normalized["category"],
+            normalized["debt_identifier"],
+        )
+        self._validate_actual_amount(entry_type, normalized["amount"])
+        if entry_type == ActualEntryType.DEBT_PAYMENT:
+            self._validate_current_debt_name(
+                plan_id,
+                normalized["debt_identifier"],
+            )
+        period_id, match_method = self._match_period_for_date(
+            plan_id,
+            normalized["entry_date"],
+        )
         with closing(self.database._connect()) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             with conn:
@@ -554,16 +582,16 @@ class PlanHistoryService:
                     """,
                     (
                         plan_id,
-                        entry_date.isoformat(),
+                        normalized["entry_date"].isoformat(),
                         entry_type.value,
-                        debt_identifier,
-                        to_cents(amount),
-                        category,
-                        description,
-                        source,
+                        normalized["debt_identifier"],
+                        to_cents(normalized["amount"]),
+                        normalized["category"],
+                        normalized["description"],
+                        normalized["source"],
                         utc_timestamp(),
                         corrected_entry_id,
-                        note,
+                        normalized["note"],
                     ),
                 )
                 if period_id is not None:
@@ -577,6 +605,42 @@ class PlanHistoryService:
                     )
         return self.get_actual_entry(int(cursor.lastrowid))
 
+    @staticmethod
+    def _normalize_actual_entry(
+        *,
+        entry_date: date,
+        amount: Decimal,
+        category: str,
+        description: str,
+        source: str,
+        debt_identifier: str | None,
+        note: str,
+    ) -> dict[str, Any]:
+        """Normalize and type-check fields shared by direct activity writes."""
+        if not isinstance(entry_date, date):
+            raise ValueError("activity date must be a date.")
+        for field_name, value in (
+            ("category", category),
+            ("description", description),
+            ("source", source),
+            ("note", note),
+        ):
+            if not isinstance(value, str):
+                raise ValueError(f"activity {field_name} must be text.")
+        if debt_identifier is not None and not isinstance(debt_identifier, str):
+            raise ValueError("activity debt name must be text.")
+        return {
+            "entry_date": entry_date,
+            "amount": money(amount),
+            "category": category.strip(),
+            "description": description.strip(),
+            "source": source.strip(),
+            "debt_identifier": None
+            if debt_identifier is None
+            else debt_identifier.strip() or None,
+            "note": note.strip(),
+        }
+
     def reverse_actual_entry(
         self,
         entry_id: int,
@@ -585,6 +649,15 @@ class PlanHistoryService:
         note: str = "Correction",
     ) -> ActualTransaction:
         """Reverse one original activity once while preserving immutable history."""
+        if plan_id is not None and (
+            isinstance(plan_id, bool)
+            or not isinstance(plan_id, int)
+            or plan_id <= 0
+        ):
+            raise ValueError("plan ID must be a positive integer.")
+        if not isinstance(note, str):
+            raise ValueError("reversal note must be text.")
+        note = note.strip()
         with closing(self.database._connect()) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("BEGIN IMMEDIATE")
@@ -708,6 +781,12 @@ class PlanHistoryService:
                     replacement["debt_identifier"],
                 )
                 self._validate_actual_amount(entry_type, replacement["amount"])
+                if entry_type == ActualEntryType.DEBT_PAYMENT:
+                    self._validate_current_debt_name_in_connection(
+                        conn,
+                        plan_id,
+                        replacement["debt_identifier"],
+                    )
                 period_id, match_method = self._match_period_in_connection(
                     conn,
                     plan_id,
@@ -865,13 +944,13 @@ class PlanHistoryService:
         entry_type: ActualEntryType,
         amount: Decimal,
     ) -> None:
-        """Apply existing interactive sign rules to a replacement amount."""
+        """Apply activity sign rules to new and replacement amounts."""
         if entry_type == ActualEntryType.ADJUSTMENT:
             if amount == Decimal("0.00"):
                 raise ValueError("adjustment amount must be nonzero.")
             return
         if amount <= Decimal("0.00"):
-            raise ValueError("replacement amount must be greater than $0.00.")
+            raise ValueError("activity amount must be greater than $0.00.")
 
     @staticmethod
     def _match_period_in_connection(
@@ -938,7 +1017,28 @@ class PlanHistoryService:
             ActualEntryType.SAVINGS_BALANCE_OBSERVATION,
         }:
             raise ValueError("balance observation type must be debt or savings balance.")
-        period_id, method = self._match_period_for_date(plan_id, observation_date)
+        normalized = self._normalize_balance_observation(
+            observation_date=observation_date,
+            balance=balance,
+            source=source,
+            debt_identifier=debt_identifier,
+            note=note,
+        )
+        if observation_type == ActualEntryType.DEBT_BALANCE_OBSERVATION:
+            if normalized["debt_identifier"] is None:
+                raise ValueError("debt balance observation requires a debt name.")
+            self._validate_current_debt_name(
+                plan_id,
+                normalized["debt_identifier"],
+            )
+        elif normalized["debt_identifier"] is not None:
+            raise ValueError("savings balance observation cannot use a debt name.")
+        if normalized["balance"] < Decimal("0.00"):
+            raise ValueError("balance observation cannot be negative.")
+        period_id, method = self._match_period_for_date(
+            plan_id,
+            normalized["observation_date"],
+        )
         with closing(self.database._connect()) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             with conn:
@@ -953,18 +1053,95 @@ class PlanHistoryService:
                     """,
                     (
                         plan_id,
-                        observation_date.isoformat(),
+                        normalized["observation_date"].isoformat(),
                         observation_type.value,
-                        debt_identifier,
-                        to_cents(balance),
-                        source,
-                        note,
+                        normalized["debt_identifier"],
+                        to_cents(normalized["balance"]),
+                        normalized["source"],
+                        normalized["note"],
                         utc_timestamp(),
                         period_id,
                         method,
                     ),
                 )
         return self.get_balance_observation(int(cursor.lastrowid))
+
+    @staticmethod
+    def _normalize_balance_observation(
+        *,
+        observation_date: date,
+        balance: Decimal,
+        source: str,
+        debt_identifier: str | None,
+        note: str,
+    ) -> dict[str, Any]:
+        """Normalize direct balance-observation fields before persistence."""
+        if not isinstance(observation_date, date):
+            raise ValueError("observation date must be a date.")
+        if not isinstance(source, str):
+            raise ValueError("balance observation source must be text.")
+        if not isinstance(note, str):
+            raise ValueError("balance observation note must be text.")
+        if debt_identifier is not None and not isinstance(debt_identifier, str):
+            raise ValueError("balance observation debt name must be text.")
+        return {
+            "observation_date": observation_date,
+            "balance": money(balance),
+            "source": source.strip(),
+            "debt_identifier": None
+            if debt_identifier is None
+            else debt_identifier.strip() or None,
+            "note": note.strip(),
+        }
+
+    def _validate_current_debt_name(
+        self,
+        plan_id: int,
+        debt_identifier: str | None,
+    ) -> None:
+        """Require a debt name from the selected plan's active configuration."""
+        with closing(self.database._connect()) as conn:
+            self._validate_current_debt_name_in_connection(
+                conn,
+                plan_id,
+                debt_identifier,
+            )
+
+    @staticmethod
+    def _validate_current_debt_name_in_connection(
+        conn: sqlite3.Connection,
+        plan_id: int,
+        debt_identifier: str | None,
+    ) -> None:
+        """Validate a debt name using the active immutable config snapshot."""
+        row = conn.execute(
+            """
+            SELECT pv.config_snapshot
+            FROM plans AS p
+            JOIN plan_versions AS pv ON pv.id = p.current_version_id
+            WHERE p.id = ?
+            """,
+            (plan_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("selected plan does not have an active saved version.")
+        try:
+            payload = json.loads(row[0])
+            debt_names = {
+                debt["name"].strip()
+                for debt in payload.get("debts", [])
+                if isinstance(debt, dict)
+                and isinstance(debt.get("name"), str)
+                and debt["name"].strip()
+            }
+        except (AttributeError, json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(
+                "the active saved plan debt details are invalid."
+            ) from exc
+        if debt_identifier not in debt_names:
+            raise ValueError(
+                "debt name is not present in the active saved plan."
+            )
 
     def get_balance_observation(self, observation_id: int) -> BalanceObservation:
         """Return one balance observation by ID."""

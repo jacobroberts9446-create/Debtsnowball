@@ -443,10 +443,61 @@ def test_run_cli_accepts_parsed_namespace_for_existing_commands(monkeypatch) -> 
         ),
     )
 
-    cli.run_cli(
+    result = cli.run_cli(
         Namespace(command="plan", plan_command="list"),
         dependencies=minimal_cli_dependencies(service_factory=FakeService),
     )
 
+    assert result == 0
     assert calls == [("plan", "list")]
+
+
+def test_cli_main_returns_zero_for_successful_command() -> None:
+    """Successful argparse commands return a process-compatible zero code."""
+    result = cli.main(
+        ["plan", "list"],
+        dependencies=minimal_cli_dependencies(),
+    )
+
+    assert result == 0
+
+
+def test_cli_main_returns_nonzero_and_friendly_text_for_expected_failure() -> None:
+    """Expected command failures return one without exposing a traceback."""
+    output = []
+
+    class FailingService(FakePlanHistoryService):
+        def list_plans(self):
+            raise ValueError("saved plans unavailable")
+
+    result = cli.main(
+        ["plan", "list"],
+        dependencies=minimal_cli_dependencies(
+            service_factory=FailingService,
+            output_func=output.append,
+        ),
+    )
+
+    assert result == 1
+    assert output == ["Error: saved plans unavailable"]
+
+
+def test_cli_summary_missing_forecast_returns_nonzero() -> None:
+    """CLI summary propagates the consistent missing-forecast domain message."""
+    output = []
+
+    class MissingForecastService(FakePlanHistoryService):
+        def compare_forecast_to_actual(self, _plan_id):
+            raise ValueError("No forecast is available for the active version.")
+
+    result = cli.main(
+        ["actual", "summary", "--plan-id", "1"],
+        dependencies=minimal_cli_dependencies(
+            service_factory=MissingForecastService,
+            output_func=output.append,
+        ),
+    )
+
+    assert result == 1
+    assert output == ["Error: No forecast is available for the active version."]
 

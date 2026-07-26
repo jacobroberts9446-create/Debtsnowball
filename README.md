@@ -606,11 +606,14 @@ python run.py plan list
 python run.py plan history --plan-id 1
 python run.py plan compare --from-version 1 --to-version 2
 python run.py plan restore --version 1
-python run.py actual add --plan-id 1 --date 2026-07-17 --type debt_payment --amount 215.00
+python run.py actual add --plan-id 1 --date 2026-07-17 --type debt_payment --amount 215.00 --category Citi
 python run.py actual summary --plan-id 1
 python run.py export --plan-id 1 --path output/current-plan.json
 python run.py import --path output/current-plan.json --name "Imported Plan"
 ```
+
+Command-line operations return exit code `0` on success and a nonzero exit code
+for expected validation, persistence, import, or comparison failures.
 
 SQLite schema version `3` adds:
 

@@ -590,8 +590,8 @@ def test_forecast_vs_actual_explains_when_no_progress_exists() -> None:
     assert "Status: Insufficient actual data" in output
 
 
-def test_progress_summary_reports_empty_progress_without_comparison_call() -> None:
-    """The empty summary does not request an unnecessary comparison."""
+def test_progress_summary_reports_empty_progress_after_forecast_validation() -> None:
+    """The empty summary validates forecast availability before reporting status."""
     service = FakeProgressService()
     service.actual_entries = []
     service.observations = []
@@ -605,7 +605,36 @@ def test_progress_summary_reports_empty_progress_without_comparison_call() -> No
     )
 
     assert "No progress recorded" in output_text(output)
-    assert not any(call[0] == "compare_forecast_to_actual" for call in service.calls)
+    assert any(call[0] == "compare_forecast_to_actual" for call in service.calls)
+
+
+def test_progress_views_report_missing_active_forecast_consistently() -> None:
+    """Both read-only progress views use the same missing-forecast message."""
+    service = FakeProgressService()
+
+    def missing_forecast(_plan_id):
+        raise ValueError("No forecast is available for the active version.")
+
+    service.compare_forecast_to_actual = missing_forecast
+    summary_output = []
+    comparison_output = []
+
+    plan_progress.show_progress_summary(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=summary_output.append,
+    )
+    plan_progress.show_forecast_vs_actual(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=comparison_output.append,
+    )
+
+    expected = "Error: No forecast is available for the active version."
+    assert expected in summary_output
+    assert expected in comparison_output
 
 
 def test_progress_menu_invalid_selection_then_back() -> None:

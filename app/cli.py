@@ -1,6 +1,7 @@
 """Command-line interface construction and command routing."""
 
 import argparse
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -28,19 +29,19 @@ def main(
     *,
     interactive_runner: Callable[[], None] | None = None,
     dependencies: CliDependencies | None = None,
-) -> None:
+) -> int:
     """Run either the argparse CLI or the interactive menu."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command:
-        run_cli(args, dependencies=dependencies)
-        return
+        return run_cli(args, dependencies=dependencies)
 
     if interactive_runner is None:
         from run import run_main_menu
 
         interactive_runner = run_main_menu
     interactive_runner()
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,7 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     actual_add.add_argument("--amount", required=True)
-    actual_add.add_argument("--category", default="")
+    actual_add.add_argument(
+        "--category",
+        default="",
+        help="Bill or debt name when required",
+    )
     actual_add.add_argument("--description", default="")
     actual_sub.add_parser(
         "summary",
@@ -126,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_cli(args: argparse.Namespace, dependencies: CliDependencies | None = None) -> None:
+def run_cli(args: argparse.Namespace, dependencies: CliDependencies | None = None) -> int:
     """Run optional CLI commands with plain errors for normal user mistakes."""
     dependencies = dependencies or _default_dependencies()
     output = dependencies.output_func
@@ -148,8 +153,10 @@ def run_cli(args: argparse.Namespace, dependencies: CliDependencies | None = Non
             output(f"Imported plan {plan.id}: {plan.name}")
         elif args.command == "history-report":
             dependencies.write_history_report(service, args.plan_id, args.path)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
         output(f"Error: {exc}")
+        return 1
+    return 0
 
 
 def run_plan_command(
@@ -205,14 +212,20 @@ def run_actual_command(
 ) -> None:
     """Run actual-entry CLI commands."""
     if args.actual_command == "add":
+        entry_type = ActualEntryType(args.type)
         entry = service.add_actual_entry(
             args.plan_id,
             date.fromisoformat(args.date),
-            args.type,
+            entry_type,
             args.amount,
             category=args.category,
             description=args.description,
             source="cli",
+            debt_identifier=(
+                args.category
+                if entry_type == ActualEntryType.DEBT_PAYMENT
+                else None
+            ),
         )
         output(f"Added actual entry {entry.id}")
     elif args.actual_command == "summary":

@@ -670,12 +670,12 @@ def show_progress_summary(
         versions = service.list_plan_versions(current_plan.id)
         actual_entries = service.list_actual_entries(current_plan.id)
         observations = service.list_balance_observations(current_plan.id)
-        comparison = (
-            None
+        comparison = service.compare_forecast_to_actual(current_plan.id)
+        status = (
+            "No progress recorded"
             if not actual_entries and not observations
-            else service.compare_forecast_to_actual(current_plan.id)
+            else comparison.status
         )
-        status = "No progress recorded" if comparison is None else comparison.status
     except EXPECTED_SERVICE_ERRORS as exc:
         print_error(str(exc), output_func)
     else:
@@ -697,7 +697,7 @@ def show_progress_summary(
             ],
             output_func,
         )
-        if comparison is not None:
+        if actual_entries or observations:
             _show_debt_balance_comparisons(
                 comparison.debt_balance_comparisons,
                 output_func,
