@@ -1,4 +1,4 @@
-"""DebtSnowball application composition root."""
+"""DebtPilot application composition root."""
 
 from decimal import Decimal
 from typing import Callable
@@ -24,7 +24,7 @@ from app.savings_setup import (
     SavingsStrategySelection,
     default_savings_strategy,
 )
-from app.version import APP_VERSION
+from app.version import APP_NAME, APP_VERSION
 from app.workflows.saved_plans import (
     run_saved_plans_menu,
     save_current_plan,
@@ -37,7 +37,7 @@ from app.workflows.workbook_export import (
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the CLI entrypoint with DebtSnowball workflow callbacks."""
+    """Run the CLI entrypoint with DebtPilot workflow callbacks."""
     return cli_main(
         argv,
         interactive_runner=run_main_menu,
@@ -75,7 +75,7 @@ def run_main_menu(
     )
 
     run_menu(
-        title=f"DebtSnowball v{APP_VERSION}",
+        title=f"{APP_NAME} v{APP_VERSION}",
         options=options,
         input_func=input_func,
         output_func=output_func,
@@ -168,7 +168,7 @@ def show_menu_help(
         "Saved Plan History: select a plan in Saved Plans to view prior versions."
     )
     output_func("Help: explains the menu options.")
-    output_func("Exit: closes DebtSnowball without generating a plan.")
+    output_func(f"Exit: closes {APP_NAME} without generating a plan.")
     wait_for_enter(input_func)
     return False
 

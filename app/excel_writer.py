@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.paths import default_workbook_path
 from app.serialization import dumps_json
+from app.version import APP_NAME
 
 
 class ExcelWriter:
@@ -716,7 +717,7 @@ class ExcelWriter:
         scenario_comparison: ScenarioComparison | None = None,
         target_result: DebtFreeTargetResult | None = None,
     ) -> None:
-        sheet["A1"] = "DebtSnowball Dashboard"
+        sheet["A1"] = f"{APP_NAME} Dashboard"
         sheet["A1"].font = Font(bold=True, size=16)
         sheet.merge_cells("A1:D1")
 

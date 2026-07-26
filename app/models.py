@@ -1,7 +1,7 @@
 """
 models.py
 ----------
-Core data models used throughout DebtSnowball.
+Core data models used throughout DebtPilot.
 """
 
 from dataclasses import dataclass, field

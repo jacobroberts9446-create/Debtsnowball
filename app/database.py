@@ -1,7 +1,7 @@
 """
 database.py
 
-SQLite persistence for generated DebtSnowball plans.
+SQLite persistence for generated DebtPilot plans.
 """
 
 import shutil

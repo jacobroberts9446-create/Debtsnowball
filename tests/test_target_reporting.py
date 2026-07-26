@@ -93,5 +93,5 @@ def test_disabled_target_preserves_current_workbook_behavior(tmp_path):
 
     workbook = load_workbook(workbook_path)
     assert "Debt-Free Target" not in workbook.sheetnames
-    assert workbook["Dashboard"]["A1"].value == "DebtSnowball Dashboard"
+    assert workbook["Dashboard"]["A1"].value == "DebtPilot Dashboard"
     workbook.close()

@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 - Interactive recording of current debt and savings balances
 - Safe interactive reversal of recorded activity with immutable audit history
 - Atomic activity correction with linked reversal and replacement entries
+- Automatic, non-destructive migration from the former DebtSnowball local-data
+  directory to the DebtPilot local-data directory
 
 ### Fixed
 - Debt balance observations now compare with the matching active-forecast debt
@@ -26,6 +28,10 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - CI now runs tests, coverage, Ruff, compilation, CLI help, and a Windows
   PyInstaller build for the development branch.
+- Product renamed from DebtSnowball to DebtPilot.
+- Portable executable renamed to `DebtPilot.exe`.
+- Generated workbooks now use the `debtpilot_plan.xlsx` filename and DebtPilot
+  dashboard branding.
 
 ## [1.1.0] - Unreleased
 

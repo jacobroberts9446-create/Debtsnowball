@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from decimal import Decimal
 from typing import TextIO
 
+from app.version import APP_NAME, APP_TAGLINE
+
 BANNER_WIDTH = 60
 ANSI_RESET = "\033[0m"
 ANSI_STYLES = {
@@ -29,7 +31,9 @@ def ansi_color_enabled(
     if "NO_COLOR" in environ:
         return False
 
-    override = environ.get("DEBTSNOWBALL_COLOR")
+    override = environ.get("DEBTPILOT_COLOR")
+    if override is None:
+        override = environ.get("DEBTSNOWBALL_COLOR")
     if override == "1":
         return True
     if override == "0":
@@ -99,10 +103,10 @@ def muted_text(text: str, *, enable_color: bool | None = None) -> str:
 
 
 def print_application_banner(version: str, output_func: OutputFunc = print) -> None:
-    """Print the standard DebtSnowball application banner."""
+    """Print the standard DebtPilot application banner."""
     output_func(heading_text("=" * BANNER_WIDTH))
-    output_func(heading_text(f"DebtSnowball v{version}"))
-    output_func(muted_text("Personal Debt Planning"))
+    output_func(heading_text(f"{APP_NAME} v{version}"))
+    output_func(muted_text(APP_TAGLINE))
     output_func(heading_text("=" * BANNER_WIDTH))
 
 

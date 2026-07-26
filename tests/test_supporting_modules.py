@@ -292,7 +292,7 @@ def test_excel_writer_handles_empty_forecast(tmp_path):
     assert workbook["Forecast"]["A1"].value == "Forecast"
     assert workbook["Forecast"]["A4"].value == "Estimated Debt-Free Date"
     assert len(workbook["Forecast"]._charts) == 0
-    assert workbook["Dashboard"]["A1"].value == "DebtSnowball Dashboard"
+    assert workbook["Dashboard"]["A1"].value == "DebtPilot Dashboard"
     workbook.close()
 
 

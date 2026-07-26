@@ -1,4 +1,4 @@
-"""Build the portable Windows DebtSnowball executable."""
+"""Build the portable Windows DebtPilot executable."""
 
 from __future__ import annotations
 
@@ -9,15 +9,20 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SPEC_PATH = PROJECT_ROOT / "DebtSnowball.spec"
-DIST_APP_DIR = PROJECT_ROOT / "dist" / "DebtSnowball"
-EXE_PATH = DIST_APP_DIR / "DebtSnowball.exe"
-KNOWN_BUILD_OUTPUTS = (PROJECT_ROOT / "build" / "DebtSnowball", DIST_APP_DIR)
+SPEC_PATH = PROJECT_ROOT / "DebtPilot.spec"
+DIST_APP_DIR = PROJECT_ROOT / "dist" / "DebtPilot"
+EXE_PATH = DIST_APP_DIR / "DebtPilot.exe"
+KNOWN_BUILD_OUTPUTS = (
+    PROJECT_ROOT / "build" / "DebtPilot",
+    DIST_APP_DIR,
+    PROJECT_ROOT / "build" / "DebtSnowball",
+    PROJECT_ROOT / "dist" / "DebtSnowball",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run checks and build the one-folder Windows executable."""
-    parser = argparse.ArgumentParser(description="Build DebtSnowball.exe with PyInstaller.")
+    parser = argparse.ArgumentParser(description="Build DebtPilot.exe with PyInstaller.")
     parser.add_argument(
         "--skip-checks",
         action="store_true",

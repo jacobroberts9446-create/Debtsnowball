@@ -117,7 +117,7 @@ def test_generate_budget_plan_prints_full_workbook_path(monkeypatch) -> None:
     class FakeWriter:
         def write(self, *_args):
             return Path(
-                "C:/Users/Test/AppData/Local/DebtSnowball/output/debtsnowball_plan.xlsx"
+                "C:/Users/Test/AppData/Local/DebtPilot/output/debtpilot_plan.xlsx"
             )
 
     monkeypatch.setattr(workbook_export, "Config", FakeConfig)
@@ -145,7 +145,7 @@ def test_generate_budget_plan_prints_full_workbook_path(monkeypatch) -> None:
     text = output_text([str(item) for item in output])
     assert "Success: Excel workbook created:" in text
     assert (
-        "C:\\Users\\Test\\AppData\\Local\\DebtSnowball\\output\\debtsnowball_plan.xlsx"
+        "C:\\Users\\Test\\AppData\\Local\\DebtPilot\\output\\debtpilot_plan.xlsx"
         in text
     )
 
@@ -154,7 +154,7 @@ def test_generate_budget_plan_prints_detailed_pay_period_summary(monkeypatch) ->
     """Legacy config generation prints all detailed pay-period lines."""
     output = []
     workbook_path = Path(
-        "C:/Users/Test/AppData/Local/DebtSnowball/output/debtsnowball_plan.xlsx"
+        "C:/Users/Test/AppData/Local/DebtPilot/output/debtpilot_plan.xlsx"
     )
     summary = SimpleNamespace(
         start_date=date(2026, 1, 2),
@@ -228,7 +228,7 @@ def test_saved_plan_workbook_generation_displays_path(monkeypatch, tmp_path) -> 
     """Plan details can generate a workbook and display the full path."""
     choices = iter([""])
     output = []
-    workbook_path = tmp_path / "output" / "debtsnowball_plan.xlsx"
+    workbook_path = tmp_path / "output" / "debtpilot_plan.xlsx"
     service = FakePlanHistoryService(
         [
             SimpleNamespace(
@@ -555,8 +555,8 @@ def test_incomplete_saved_config_reports_clear_workbook_failure() -> None:
 
 def test_guided_saved_plan_generates_physical_workbook(monkeypatch, tmp_path) -> None:
     """A user-created saved plan can generate a real workbook from Saved Plans."""
-    monkeypatch.setenv("DEBTSNOWBALL_DATA_DIR", str(tmp_path))
-    workbook_path = tmp_path / "output" / "debtsnowball_plan.xlsx"
+    monkeypatch.setenv("DEBTPILOT_DATA_DIR", str(tmp_path))
+    workbook_path = tmp_path / "output" / "debtpilot_plan.xlsx"
     assert not workbook_path.parent.exists()
     assert not workbook_path.exists()
 

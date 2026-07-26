@@ -1,4 +1,4 @@
-"""Serialization helpers for DebtSnowball result objects."""
+"""Serialization helpers for DebtPilot result objects."""
 
 from dataclasses import asdict, is_dataclass
 from datetime import date
@@ -36,5 +36,5 @@ def to_json_ready(value: Any) -> Any:
 
 
 def dumps_json(value: Any, **kwargs: Any) -> str:
-    """Serialize supported DebtSnowball objects to JSON."""
+    """Serialize supported DebtPilot objects to JSON."""
     return json.dumps(to_json_ready(value), **kwargs)

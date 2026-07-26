@@ -257,6 +257,15 @@ def test_debtsnowball_color_force_off(monkeypatch) -> None:
     assert console.success_text("Success: Done") == "Success: Done"
 
 
+def test_debtpilot_color_force_on_takes_precedence(monkeypatch) -> None:
+    """The current DebtPilot color override takes precedence over the legacy alias."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("DEBTPILOT_COLOR", "1")
+    monkeypatch.setenv("DEBTSNOWBALL_COLOR", "0")
+
+    assert console.warning_text("Warning: Careful").startswith("\033[33m")
+
+
 def test_color_disabled_for_non_tty_output() -> None:
     """Non-TTY output disables color automatically."""
     enabled = console.ansi_color_enabled(FakeStream(False), {"TERM": "xterm-256color"})
@@ -378,7 +387,7 @@ def test_menu_help_explains_options_and_returns_to_menu() -> None:
         output_func=output.append,
     )
 
-    assert output.count("DebtSnowball v1.2.0-dev") == 2
+    assert output.count("DebtPilot v1.2.0-dev") == 2
     assert "Create New Plan: starts the guided interactive setup workflow." in output
     assert "Generate Plan From Config" not in output
     assert "Saved Plans: opens separate scenarios or people's saved plans." in output
@@ -388,7 +397,7 @@ def test_menu_help_explains_options_and_returns_to_menu() -> None:
     )
     assert not any(line.startswith("History:") for line in output)
     assert "Help: explains the menu options." in output
-    assert "Exit: closes DebtSnowball without generating a plan." in output
+    assert "Exit: closes DebtPilot without generating a plan." in output
     assert "Press Enter to continue..." in prompts
     assert "Success: Goodbye." in output
 
@@ -404,7 +413,7 @@ def test_menu_invalid_input_returns_to_menu() -> None:
         output_func=output.append,
     )
 
-    assert output.count("DebtSnowball v1.2.0-dev") == 2
+    assert output.count("DebtPilot v1.2.0-dev") == 2
     assert "Warning: Please choose one of: 1, 2, 3, 4." in output
     assert "Success: Goodbye." in output
 

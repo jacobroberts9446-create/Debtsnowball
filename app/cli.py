@@ -9,6 +9,7 @@ from typing import Any
 
 from app.history import PlanHistoryService
 from app.models import ActualEntryType
+from app.version import APP_NAME
 from app.workflows.workbook_export import write_history_report
 
 
@@ -46,7 +47,7 @@ def main(
 
 def build_parser() -> argparse.ArgumentParser:
     """Create optional history CLI commands while preserving default behavior."""
-    parser = argparse.ArgumentParser(description="DebtSnowball")
+    parser = argparse.ArgumentParser(description=APP_NAME)
     subparsers = parser.add_subparsers(dest="command")
 
     plan = subparsers.add_parser("plan", help="Manage saved local plans")
