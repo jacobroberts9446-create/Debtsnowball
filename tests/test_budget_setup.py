@@ -198,8 +198,8 @@ def test_debt_entry_back_navigation_restarts_setup_fields() -> None:
     assert result.pay_frequency == PayFrequency.BIWEEKLY
 
 
-def test_bill_entry_back_navigation_restarts_setup_fields() -> None:
-    """Choosing back after cancelled bill entry returns to setup fields."""
+def test_bill_entry_back_navigation_preserves_completed_setup_fields() -> None:
+    """Back from bills revisits debts without discarding completed plan basics."""
     bill_results = ["back", [sample_bill("New Bill")]]
 
     def bill_collector(**_kwargs):
@@ -215,10 +215,6 @@ def test_bill_entry_back_navigation_restarts_setup_fields() -> None:
             "1000",
             "1",
             "1",
-            "New",
-            "2",
-            "07/31/2026",
-            "2000",
             "1",
             "1",
             "1",
@@ -240,7 +236,8 @@ def test_bill_entry_back_navigation_restarts_setup_fields() -> None:
     )
 
     assert result is not None
-    assert result.plan_name == "New"
+    assert result.plan_name == "Old"
+    assert result.setup.net_paycheck_amount == Decimal("1000.00")
     assert result.bills[0].name == "New Bill"
 
 
@@ -252,6 +249,55 @@ def test_cancellation_from_major_section_returns_none() -> None:
 
     assert result is None
     assert calls["debt"] == []
+    assert "Warning: Plan setup cancelled." in output
+
+
+def test_cancel_during_bill_prompt_abandons_plan_setup() -> None:
+    """Typing cancel in bill entry exits the full setup without a follow-up menu."""
+    output = []
+    inputs = iter(["Plan", "2", "07/17/2026", "2000", "1", "1", "cancel"])
+
+    result = budget_setup.collect_budget_setup(
+        input_func=lambda _prompt: next(inputs),
+        output_func=output.append,
+        debt_collector=lambda *_args, **_kwargs: [sample_debt()],
+        generator=summary_stub,
+    )
+
+    assert result is None
+    assert "Warning: Bill entry cancelled." in output
+    assert "Warning: Plan setup cancelled." in output
+
+
+def test_cancel_during_savings_strategy_abandons_plan_setup() -> None:
+    """The cancellation keyword exits from the final strategy prompt."""
+    output = []
+    inputs = iter(
+        [
+            "Plan",
+            "2",
+            "07/17/2026",
+            "2000",
+            "1",
+            "1",
+            "1",
+            "0",
+            "1",
+            "500",
+            "1000",
+            "cancel",
+        ]
+    )
+
+    result = budget_setup.collect_budget_setup(
+        input_func=lambda _prompt: next(inputs),
+        output_func=output.append,
+        debt_collector=lambda *_args, **_kwargs: [sample_debt()],
+        bill_collector=lambda **_kwargs: [sample_bill()],
+        generator=summary_stub,
+    )
+
+    assert result is None
     assert "Warning: Plan setup cancelled." in output
 
 

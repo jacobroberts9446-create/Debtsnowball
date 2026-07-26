@@ -10,6 +10,10 @@ MenuAction = Callable[[], bool]
 MenuTitleRenderer = Callable[[str, OutputFunc], None]
 
 
+class InputCancelled(Exception):
+    """Signal that a user entered the shared setup cancellation keyword."""
+
+
 @dataclass(frozen=True)
 class MenuOption:
     """One selectable interactive menu option."""

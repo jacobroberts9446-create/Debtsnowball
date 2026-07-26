@@ -5,7 +5,7 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 
 from app.console import OutputFunc, print_success, print_table, print_warning
-from app.menu import InputFunc, MenuOption, display_menu
+from app.menu import InputCancelled, InputFunc, MenuOption, display_menu
 from app.models import Debt
 from app.money import format_currency, money, to_decimal
 
@@ -14,18 +14,26 @@ def collect_debts(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
     initial_debts: list[Debt] | None = None,
+    *,
+    raise_on_cancel: bool = False,
 ) -> list[Debt] | None:
     """Collect debts interactively and return confirmed Debt objects."""
     debts: list[Debt] = [] if initial_debts is None else deepcopy(initial_debts)
     normalize_snowball_order(debts)
 
-    if initial_debts is None:
-        while True:
-            debts.append(prompt_debt(len(debts) + 1, input_func, output_func))
-            if not prompt_yes_no("Add another debt? [y/N]: ", input_func):
-                break
+    try:
+        if initial_debts is None:
+            while True:
+                debts.append(prompt_debt(len(debts) + 1, input_func, output_func))
+                if not prompt_yes_no("Add another debt? [y/N]: ", input_func):
+                    break
 
-    return review_debts(debts, input_func, output_func)
+        return review_debts(debts, input_func, output_func)
+    except InputCancelled:
+        print_warning("Debt entry cancelled.", output_func)
+        if raise_on_cancel:
+            raise
+        return None
 
 
 def prompt_debt(
@@ -114,6 +122,9 @@ def review_debts(
         display_menu("Review Debts", options, output_func)
 
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Debt entry cancelled.", output_func)
+            return None
         if choice == "4":
             print_success("Debt entry complete.", output_func)
             return list(debts)
@@ -181,6 +192,8 @@ def prompt_debt_index(
         return None
 
     raw_value = input_func(prompt).strip()
+    if raw_value.casefold() == "cancel":
+        raise InputCancelled
     try:
         selected = int(raw_value)
     except ValueError:
@@ -232,6 +245,8 @@ def prompt_validated[T](
     """Prompt until a parser returns a valid value."""
     while True:
         raw_value = input_func(prompt)
+        if raw_value.strip().casefold() == "cancel":
+            raise InputCancelled
         try:
             return parser(raw_value)
         except ValueError:
@@ -243,7 +258,10 @@ def prompt_yes_no(
     input_func: InputFunc = input,
 ) -> bool:
     """Return True only for y/yes."""
-    return input_func(prompt).strip().casefold() in {"y", "yes"}
+    response = input_func(prompt).strip().casefold()
+    if response == "cancel":
+        raise InputCancelled
+    return response in {"y", "yes"}
 
 
 def parse_debt_name(value: str) -> str:

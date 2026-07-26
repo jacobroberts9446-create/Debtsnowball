@@ -355,6 +355,54 @@ def test_launcher_reports_successful_data_migration(tmp_path) -> None:
     assert output[-1] == "menu"
 
 
+def test_launcher_explains_when_current_and_legacy_data_both_exist(tmp_path) -> None:
+    """Coexisting data locations are explained without overwriting either one."""
+    legacy = tmp_path / "DebtSnowball"
+    current = tmp_path / "DebtPilot"
+    legacy.mkdir()
+    current.mkdir()
+    output = []
+    result = DataMigrationResult(
+        DataMigrationStatus.DESTINATION_EXISTS,
+        legacy,
+        current,
+    )
+
+    exit_code = app_launcher.main(
+        menu_runner=lambda: output.append("menu"),
+        output_func=output.append,
+        migration_func=lambda: result,
+    )
+
+    text = "\n".join(output)
+    assert exit_code == 0
+    assert "Both DebtPilot and legacy DebtSnowball data were found." in text
+    assert "will not overwrite the DebtSnowball data" in text
+    assert output[-1] == "menu"
+
+
+def test_launcher_migration_failure_gives_recovery_guidance_without_traceback() -> None:
+    """Expected migration failures preserve data and avoid technical tracebacks."""
+    errors = []
+
+    exit_code = app_launcher.main(
+        menu_runner=lambda: None,
+        error_func=errors.append,
+        pause_on_error=False,
+        migration_func=lambda: (_ for _ in ()).throw(
+            DataMigrationError("copy failed: disk full")
+        ),
+    )
+
+    text = "\n".join(errors)
+    assert exit_code == 1
+    assert "could not migrate existing DebtSnowball data" in text
+    assert "copy failed: disk full" in text
+    assert "existing data was not changed" in text
+    assert "folder permissions" in text
+    assert "Traceback" not in text
+
+
 def test_packaged_migration_keeps_saved_plans_available(
     monkeypatch,
     tmp_path,

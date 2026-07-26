@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from app.console import OutputFunc, print_warning
 from app.debt_input import prompt_validated
-from app.menu import InputFunc, MenuOption, display_menu
+from app.menu import InputCancelled, InputFunc, MenuOption, display_menu
 from app.money import to_decimal
 
 
@@ -51,6 +51,8 @@ def prompt_savings_strategy(
     while True:
         display_menu("Savings Strategy", options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            raise InputCancelled
         if choice == "1":
             return SavingsStrategySelection(
                 SavingsStrategy.EMERGENCY_FIRST,

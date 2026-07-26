@@ -37,6 +37,7 @@ __all__ = [
     "record_personal_spending_action",
     "record_savings_balance_action",
     "record_savings_deposit_action",
+    "record_savings_withdrawal_action",
     "reverse_entry_action",
     "run_entry_review_menu",
     "run_record_activity_menu",
@@ -201,6 +202,16 @@ def run_record_activity_menu(
         ),
         MenuOption(
             "5",
+            "Savings Withdrawal",
+            lambda: record_savings_withdrawal_action(
+                service,
+                current_plan,
+                input_func,
+                output_func,
+            ),
+        ),
+        MenuOption(
+            "6",
             "Personal Spending",
             lambda: record_personal_spending_action(
                 service,
@@ -210,7 +221,7 @@ def run_record_activity_menu(
             ),
         ),
         MenuOption(
-            "6",
+            "7",
             "Adjustment",
             lambda: record_adjustment_action(
                 service,
@@ -219,7 +230,7 @@ def run_record_activity_menu(
                 output_func,
             ),
         ),
-        MenuOption("7", "Back", lambda: True),
+        MenuOption("8", "Back", lambda: True),
     ]
     run_menu(
         title="Record Activity",
@@ -615,6 +626,24 @@ def record_savings_deposit_action(
     )
 
 
+def record_savings_withdrawal_action(
+    service: PlanHistoryService,
+    plan: Any,
+    input_func: InputFunc = input,
+    output_func: OutputFunc = print,
+) -> bool:
+    """Record a savings withdrawal against the selected plan."""
+    return _record_activity(
+        service,
+        plan,
+        ActualEntryType.SAVINGS_WITHDRAWAL,
+        "Savings Withdrawal",
+        input_func,
+        output_func,
+        category="Savings",
+    )
+
+
 def record_personal_spending_action(
     service: PlanHistoryService,
     plan: Any,
@@ -671,6 +700,12 @@ def show_progress_summary(
         actual_entries = service.list_actual_entries(current_plan.id)
         observations = service.list_balance_observations(current_plan.id)
         comparison = service.compare_forecast_to_actual(current_plan.id)
+        recorded_activity_count = sum(
+            getattr(entry, "source", "interactive")
+            not in {"correction", "correction_replacement"}
+            for entry in actual_entries
+        )
+        audit_row_count = len(actual_entries) - recorded_activity_count
         status = (
             "No progress recorded"
             if not actual_entries and not observations
@@ -691,7 +726,8 @@ def show_progress_summary(
                     ),
                 ],
                 ["Saved versions", str(len(versions))],
-                ["Recorded transactions", str(len(actual_entries))],
+                ["Recorded activities", str(recorded_activity_count)],
+                ["Correction audit rows", str(audit_row_count)],
                 ["Balance observations", str(len(observations))],
                 ["Status", status],
             ],

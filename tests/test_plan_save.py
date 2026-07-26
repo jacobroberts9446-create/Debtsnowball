@@ -204,6 +204,8 @@ def test_save_new_plan() -> None:
     assert "â" not in "\n".join(output)
     assert "Version:" in output
     assert "1" in output
+    assert "Jul 24, 2026 at 12:00 PM" in output
+    assert "2026-07-24T12:00:00+00:00" not in output
 
 
 def test_overwrite_existing_plan_saves_new_version() -> None:

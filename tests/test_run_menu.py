@@ -388,16 +388,21 @@ def test_menu_help_explains_options_and_returns_to_menu() -> None:
     )
 
     assert output.count("DebtPilot v1.2.0-dev") == 2
-    assert "Create New Plan: starts the guided interactive setup workflow." in output
+    assert "Create New Plan: enter your budget, debts, and savings strategy." in output
     assert "Generate Plan From Config" not in output
-    assert "Saved Plans: opens separate scenarios or people's saved plans." in output
     assert (
-        "Saved Plan History: select a plan in Saved Plans to view prior versions."
+        "Saved Plans: reopen plans, generate workbooks, and track progress."
         in output
     )
-    assert not any(line.startswith("History:") for line in output)
-    assert "Help: explains the menu options." in output
-    assert "Exit: closes DebtPilot without generating a plan." in output
+    assert (
+        "Track Progress: record activity and balances, then compare them "
+        "with your forecast."
+        in output
+    )
+    assert any(line.startswith("History:") for line in output)
+    assert any(line.startswith("Workbook:") for line in output)
+    assert any(line.startswith("Versioning:") for line in output)
+    assert "Exit: closes DebtPilot." in output
     assert "Press Enter to continue..." in prompts
     assert "Success: Goodbye." in output
 

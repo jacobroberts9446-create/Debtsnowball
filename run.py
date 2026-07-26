@@ -162,13 +162,21 @@ def show_menu_help(
 ) -> bool:
     """Print brief help for the interactive menu before returning."""
     output_func("")
-    output_func("Create New Plan: starts the guided interactive setup workflow.")
-    output_func("Saved Plans: opens separate scenarios or people's saved plans.")
+    output_func("Create New Plan: enter your budget, debts, and savings strategy.")
     output_func(
-        "Saved Plan History: select a plan in Saved Plans to view prior versions."
+        "Saved Plans: reopen plans, generate workbooks, and track progress."
     )
-    output_func("Help: explains the menu options.")
-    output_func(f"Exit: closes {APP_NAME} without generating a plan.")
+    output_func(
+        "Track Progress: record activity and balances, then compare them "
+        "with your forecast."
+    )
+    output_func(
+        "History: review versions, compare changes, restore a version, "
+        "or correct recorded activity."
+    )
+    output_func("Workbook: generate the Excel plan for a selected saved plan.")
+    output_func("Versioning: save plan changes without overwriting prior versions.")
+    output_func(f"Exit: closes {APP_NAME}.")
     wait_for_enter(input_func)
     return False
 

@@ -13,7 +13,7 @@ from app.console import (
     print_warning,
 )
 from app.debt_input import collect_debts, parse_nonnegative_money, total_debt_balance
-from app.menu import InputFunc, MenuOption, display_menu
+from app.menu import InputCancelled, InputFunc, MenuOption, display_menu
 from app.models import Debt
 
 
@@ -69,7 +69,7 @@ def collect_plan_setup(
                 debts=debts,
             )
             return review_plan_setup(result, input_func, output_func, debt_collector)
-    except PlanSetupCancelled:
+    except (InputCancelled, PlanSetupCancelled):
         print_warning("Plan setup cancelled.", output_func)
         return None
 
@@ -117,6 +117,9 @@ def review_plan_setup(
         ]
         display_menu("Review Plan Setup", options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Plan setup cancelled.", output_func)
+            return None
 
         try:
             if choice == "1":
@@ -182,6 +185,7 @@ def collect_setup_debts(
             input_func=input_func,
             output_func=output_func,
             initial_debts=initial_debts,
+            raise_on_cancel=True,
         )
         if debts is not None:
             return debts
@@ -215,6 +219,9 @@ def prompt_debt_cancellation_action(
     while True:
         display_menu("Debt Entry Cancelled", options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Plan setup cancelled.", output_func)
+            return "cancel"
         if choice == "1":
             return "retry"
         if choice == "2":

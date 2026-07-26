@@ -9,6 +9,7 @@ from app.database import DatabaseMigrationError
 from app.history import PlanHistoryService
 from app.menu import InputFunc, MenuOption, display_menu, wait_for_enter
 from app.plan_generation import setup_to_engine_config
+from app.workflows.plan_presenter import format_saved_datetime
 
 EXPECTED_SAVE_ERRORS = (ValueError, OSError, sqlite3.Error, DatabaseMigrationError)
 
@@ -209,4 +210,4 @@ def print_save_success(
     output_func(str(result.version.version_number))
     output_func("")
     output_func("Saved:")
-    output_func(result.version.created_at)
+    output_func(format_saved_datetime(result.version.created_at))

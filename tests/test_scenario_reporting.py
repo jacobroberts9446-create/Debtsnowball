@@ -132,6 +132,12 @@ def test_scenario_comparison_sheet_summary_formatting_and_charts(tmp_path):
     assert sheet["B5"].number_format == "$#,##0.00"
     assert sheet["C5"].number_format == "mmm d, yyyy"
     assert sheet["D5"].number_format == "0"
+    assert sheet["C20"].value == 28
+    assert sheet["C20"].number_format == "0"
+    assert sheet["C21"].value == 14
+    assert sheet["C21"].number_format == "0"
+    assert sheet["C22"].value == 14
+    assert sheet["C22"].number_format == "0"
     assert sheet.freeze_panes == "A4"
     assert sheet.auto_filter.ref == "A3:M6"
     assert len(sheet._charts) == 2

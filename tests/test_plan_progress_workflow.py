@@ -369,7 +369,8 @@ def test_progress_menu_routes_summary_and_forecast_actions() -> None:
     assert "4. Record Balance" in text
     assert "5. Review Recorded Activity" in text
     assert "6. Back" in text
-    assert "Recorded transactions" in text
+    assert "Recorded activities" in text
+    assert "Correction audit rows" in text
     assert "Debt payments" in text
 
 
@@ -391,12 +392,53 @@ def test_progress_summary_displays_persisted_plan_information() -> None:
     assert "Jul 24, 2026 at 8:15 PM" in text
     assert "Saved versions" in text
     assert "2" in text
-    assert "Recorded transactions" in text
+    assert "Recorded activities" in text
+    assert "Correction audit rows" in text
     assert "Balance observations" in text
     assert "On track" in text
     assert "732" not in text
     assert "901" not in text
     assert "1201" not in text
+
+
+def test_progress_summary_separates_user_activity_from_correction_audit_rows() -> None:
+    """Correction append-only rows do not inflate the user activity count."""
+    service = FakeProgressService()
+    original = actual_entry(
+        1,
+        date(2026, 7, 17),
+        ActualEntryType.SAVINGS_DEPOSIT,
+        "100.00",
+    )
+    reversal = actual_entry(
+        2,
+        date(2026, 7, 17),
+        ActualEntryType.SAVINGS_DEPOSIT,
+        "-100.00",
+        corrected_entry_id=1,
+        source="correction",
+    )
+    replacement = actual_entry(
+        3,
+        date(2026, 7, 18),
+        ActualEntryType.SAVINGS_DEPOSIT,
+        "95.00",
+        corrected_entry_id=1,
+        source="correction_replacement",
+    )
+    service.actual_entries = [original, reversal, replacement]
+    output = []
+
+    plan_progress.show_progress_summary(
+        service,
+        service.plan,
+        input_func=lambda _prompt: "",
+        output_func=output.append,
+    )
+
+    text = output_text(output)
+    assert "Recorded activities   | 1" in text
+    assert "Correction audit rows | 2" in text
 
 
 def test_forecast_vs_actual_displays_existing_comparison_values() -> None:
@@ -746,6 +788,7 @@ def test_record_activity_menu_routes_every_action(monkeypatch) -> None:
         "record_bill_payment_action",
         "record_debt_payment_action",
         "record_savings_deposit_action",
+        "record_savings_withdrawal_action",
         "record_personal_spending_action",
         "record_adjustment_action",
     ]
@@ -763,15 +806,16 @@ def test_record_activity_menu_routes_every_action(monkeypatch) -> None:
     _, output = run_with_inputs(
         plan_progress.run_record_activity_menu,
         service,
-        ["1", "2", "3", "4", "5", "6", "7"],
+        ["1", "2", "3", "4", "5", "6", "7", "8"],
     )
 
     assert routed == action_names
     text = output_text(output)
     assert "Record Activity" in text
     assert "1. Income Received" in text
-    assert "6. Adjustment" in text
-    assert "7. Back" in text
+    assert "5. Savings Withdrawal" in text
+    assert "7. Adjustment" in text
+    assert "8. Back" in text
 
 
 def test_progress_menu_routes_to_record_activity(monkeypatch) -> None:
@@ -796,10 +840,10 @@ def test_record_activity_menu_invalid_selection_then_back() -> None:
     _, output = run_with_inputs(
         plan_progress.run_record_activity_menu,
         service,
-        ["invalid", "7"],
+        ["invalid", "8"],
     )
 
-    assert "Warning: Please choose one of: 1, 2, 3, 4, 5, 6, 7." in output
+    assert "Warning: Please choose one of: 1, 2, 3, 4, 5, 6, 7, 8." in output
     assert output.count("Record Activity") == 2
 
 
@@ -851,6 +895,11 @@ def test_income_reprompts_invalid_date_and_amount_and_stores_note() -> None:
             "Savings",
         ),
         (
+            plan_progress.record_savings_withdrawal_action,
+            ActualEntryType.SAVINGS_WITHDRAWAL,
+            "Savings",
+        ),
+        (
             plan_progress.record_personal_spending_action,
             ActualEntryType.PERSONAL_SPENDING,
             "Personal Spending",
@@ -883,6 +932,7 @@ def test_simple_activity_types_validate_and_persist(
     [
         plan_progress.record_income_action,
         plan_progress.record_savings_deposit_action,
+        plan_progress.record_savings_withdrawal_action,
         plan_progress.record_personal_spending_action,
     ],
 )
@@ -1170,7 +1220,7 @@ def test_recorded_activity_appears_in_subsequent_progress_summary() -> None:
     )
 
     text = output_text(output)
-    assert "Recorded transactions" in text
+    assert "Recorded activities" in text
     assert "1" in text
     assert "On track" in text
 
@@ -2263,5 +2313,5 @@ def test_reversal_refreshes_progress_from_service_history() -> None:
     )
 
     assert sum(entry.amount for entry in service.actual_entries) == Decimal("0.00")
-    assert "Recorded transactions" in output_text(output)
+    assert "Recorded activities" in output_text(output)
     assert "2" in output_text(output)

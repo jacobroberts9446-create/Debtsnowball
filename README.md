@@ -8,7 +8,7 @@ of a plan as it changes. It combines debt snowball planning, savings goals,
 calendar-aware scheduling, progress tracking, and Excel reporting in one guided
 console application.
 
-![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
+![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![Version](https://img.shields.io/badge/version-1.2.0--dev-yellow)
 ![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -32,7 +32,7 @@ console application.
 
 Requirements:
 
-- Python 3.13 or 3.14
+- Python 3.12 or 3.13
 - Windows, macOS, or Linux
 
 Clone the existing repository and enter it:
@@ -98,6 +98,32 @@ Choose **Create New Plan** to enter:
 DebtPilot generates the plan in memory and opens the Results Viewer. Review the
 summary, debt payoff order, budget, and forecast timeline before saving.
 
+Type `cancel` at an interactive setup prompt to leave the current setup safely.
+Where a **Back** option is shown, it returns one logical step and keeps the
+information already entered whenever practical.
+
+## Screenshots
+
+### Home
+
+![DebtPilot home menu](docs/images/home.png)
+
+### Saved Plans
+
+![DebtPilot saved plans](docs/images/saved_plans.png)
+
+### Track Progress
+
+![DebtPilot track progress menu](docs/images/track_progress.png)
+
+### Progress Summary
+
+![DebtPilot progress summary](docs/images/progress_summary.png)
+
+### Workbook
+
+![DebtPilot workbook dashboard](docs/images/workbook.png)
+
 ## Savings Strategies
 
 The guided setup offers:
@@ -105,9 +131,8 @@ The guided setup offers:
 - **Build Emergency Fund First**: prioritizes the configured savings target.
 - **Split Between Savings and Snowball**: uses the supported split behavior.
 - **Maximum Snowball**: directs available extra cash to debt.
-- **Custom**: records a custom savings/debt split; unsupported custom allocation
-  behavior uses the closest supported engine behavior and is identified in the
-  application.
+- **Custom**: applies user-entered savings and snowball percentages totaling
+  100%.
 
 All financial calculations use `Decimal` and round money to cents with
 `ROUND_HALF_UP`.
@@ -147,6 +172,10 @@ partial actual data. Debt observations are matched to the appropriate forecast
 debt. Corrections are atomic: the original entry remains, a linked reversal is
 created, and a replacement entry is added in one transaction.
 
+Savings withdrawals reduce net savings contributions and increase remaining
+cash in Forecast vs Actual reporting. Progress counts show user-recorded
+activities separately from correction and reversal audit rows.
+
 ## Excel Workbooks
 
 Workbook generation creates:
@@ -171,7 +200,24 @@ Excel is a presentation boundary. Calculations are completed in Python before
 values are written. Money cells are numeric, while the application keeps
 financial values as exact `Decimal` objects internally.
 
-## Portable Windows App
+## Windows App
+
+### Installer
+
+Download and run `DebtPilot-Setup-1.2.0.exe`. The installer:
+
+- installs for the current Windows user without administrator privileges;
+- creates a Start Menu shortcut;
+- offers an optional Desktop shortcut;
+- registers DebtPilot with Windows for normal uninstall support; and
+- preserves the same `%LOCALAPPDATA%/DebtPilot` data location used by the
+  portable build.
+
+DebtPilot can be removed from **Settings > Apps > Installed apps**. Removing the
+application does not delete the financial data stored under
+`%LOCALAPPDATA%/DebtPilot`.
+
+### Build the installer
 
 Install the development dependencies:
 
@@ -191,8 +237,26 @@ The result is:
 dist/DebtPilot/DebtPilot.exe
 ```
 
-This is a portable one-folder build, not an installer. Open the `DebtPilot`
-folder and run `DebtPilot.exe`.
+Install Inno Setup 6 or 7, then build the installer:
+
+```powershell
+python scripts/build_installer.py
+```
+
+The installer is written to:
+
+```text
+dist/installer/DebtPilot-Setup-1.2.0.exe
+```
+
+Use `INNO_SETUP_COMPILER` or `--compiler` when `ISCC.exe` is installed in a
+nonstandard location. Use `--skip-app-build` to package an already-built
+`dist/DebtPilot` folder.
+
+### Portable build
+
+Open the `dist/DebtPilot` folder and run `DebtPilot.exe` to use the one-folder
+portable build without installing it.
 
 ### Local data
 
@@ -231,6 +295,11 @@ When legacy data exists and `%LOCALAPPDATA%/DebtPilot` does not, DebtPilot:
 
 Migration is idempotent. An existing DebtPilot directory is never overwritten,
 and no manual data copy is required.
+
+If both locations exist, DebtPilot explains that it will use the current
+DebtPilot data and leave the legacy DebtSnowball data unchanged. A failed
+migration also leaves the legacy data untouched and displays recovery guidance
+for disk-space or folder-permission problems.
 
 For automation, `DEBTPILOT_DATA_DIR` overrides the writable packaged data path.
 The former `DEBTSNOWBALL_DATA_DIR` variable remains supported for backward
@@ -329,7 +398,8 @@ python -m compileall app run.py
 ```
 
 The GitHub Actions workflow runs tests, coverage, Ruff, compilation, CLI help,
-and a Windows PyInstaller build.
+and a Windows PyInstaller build. Compatibility tests run on Python 3.12 and
+3.13; quality checks and Windows packaging use Python 3.13.
 
 ## Project Structure
 
@@ -346,6 +416,8 @@ app/
   plan_generation.py   Interactive setup-to-engine integration
 tests/                 Automated unit, integration, and regression tests
 scripts/               Windows build support and version resources
+installer/             Per-user Windows installer definition
+docs/images/           Current synthetic-data product screenshots
 app_launcher.py        Packaged executable entry point
 run.py                 Source composition root
 config.json            Configuration-driven workflow input
@@ -355,9 +427,7 @@ DebtPilot.spec         PyInstaller build definition
 ## Known Limitations
 
 - The interface is console-based.
-- The Windows build is portable and does not include an installer or updater.
-- Custom savings percentages may use the closest currently supported engine
-  behavior when the selected split cannot be consumed directly.
+- Automatic application updates are not included.
 - The application stores data locally; cloud sync and multi-device access are
   not included.
 - SQLite and workbook files contain sensitive financial information and should

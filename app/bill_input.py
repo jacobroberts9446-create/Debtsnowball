@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from app.console import OutputFunc, print_success, print_table, print_warning
 from app.debt_input import parse_debt_name, parse_due_day, prompt_validated
-from app.menu import InputFunc, MenuOption, display_menu
+from app.menu import InputCancelled, InputFunc, MenuOption, display_menu
 from app.models import Bill
 from app.money import format_currency, money
 
@@ -14,15 +14,23 @@ def collect_bills(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
     initial_bills: list[Bill] | None = None,
+    *,
+    raise_on_cancel: bool = False,
 ) -> list[Bill] | None:
     """Collect recurring monthly bills and return confirmed Bill objects."""
     bills: list[Bill] = [] if initial_bills is None else deepcopy(initial_bills)
 
-    if initial_bills is None:
-        while prompt_yes_no("Add a recurring monthly bill? [y/N]: ", input_func):
-            bills.append(prompt_bill(input_func, output_func))
+    try:
+        if initial_bills is None:
+            while prompt_yes_no("Add a recurring monthly bill? [y/N]: ", input_func):
+                bills.append(prompt_bill(input_func, output_func))
 
-    return review_bills(bills, input_func, output_func)
+        return review_bills(bills, input_func, output_func)
+    except InputCancelled:
+        print_warning("Bill entry cancelled.", output_func)
+        if raise_on_cancel:
+            raise
+        return None
 
 
 def prompt_bill(
@@ -82,6 +90,9 @@ def review_bills(
         ]
         display_menu("Review Bills", options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Bill entry cancelled.", output_func)
+            return None
         if choice == "4":
             print_success("Bill entry complete.", output_func)
             return list(bills)
@@ -141,7 +152,10 @@ def prompt_bill_index(
         print_warning("There are no bills to select.", output_func)
         return None
     try:
-        selected = int(input_func(prompt).strip())
+        raw_value = input_func(prompt).strip()
+        if raw_value.casefold() == "cancel":
+            raise InputCancelled
+        selected = int(raw_value)
     except ValueError:
         print_warning("Please enter a valid bill number.", output_func)
         return None
@@ -184,4 +198,7 @@ def total_monthly_bills(bills: list[Bill]) -> Decimal:
 
 def prompt_yes_no(prompt: str, input_func: InputFunc = input) -> bool:
     """Return True only for y/yes."""
-    return input_func(prompt).strip().casefold() in {"y", "yes"}
+    response = input_func(prompt).strip().casefold()
+    if response == "cancel":
+        raise InputCancelled
+    return response in {"y", "yes"}

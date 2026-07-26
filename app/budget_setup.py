@@ -15,7 +15,7 @@ from app.console import (
     format_percentage,
 )
 from app.debt_input import collect_debts, parse_nonnegative_money, total_debt_balance
-from app.menu import InputFunc, MenuOption, display_menu
+from app.menu import InputCancelled, InputFunc, MenuOption, display_menu
 from app.models import Bill, Debt
 from app.money import format_currency
 from app.plan_generation import generate_plan_from_setup
@@ -63,67 +63,111 @@ def collect_budget_setup(
     generator=generate_plan_from_setup,
 ):
     """Collect full setup, review it, and generate an in-memory plan."""
+    basics = None
+    debts: list[Debt] = []
+    bills: list[Bill] = []
+    personal = Decimal("0.00")
+    step = "basics"
     try:
-        basics = collect_basic_setup_fields(input_func, output_func)
-        if prompt_section_navigation("Plan Basics", False, input_func, output_func) == "cancel":
-            return None
+        while True:
+            if step == "basics":
+                basics = collect_basic_setup_fields(input_func, output_func)
+                if (
+                    prompt_section_navigation(
+                        "Plan Basics",
+                        False,
+                        input_func,
+                        output_func,
+                    )
+                    == "cancel"
+                ):
+                    return None
+                step = "debts"
+                continue
 
-        debts = collect_debts_section([], input_func, output_func, debt_collector)
-        if debts == "back":
-            return collect_budget_setup(
-                input_func,
-                output_func,
-                debt_collector,
-                bill_collector,
-                savings_strategy_collector,
-                generator,
-            )
-        if debts is None:
-            return None
-        nav = prompt_section_navigation("Debts", True, input_func, output_func)
-        if nav == "cancel":
-            return None
-        if nav == "back":
-            return collect_budget_setup(
-                input_func,
-                output_func,
-                debt_collector,
-                bill_collector,
-                savings_strategy_collector,
-                generator,
-            )
+            if step == "debts":
+                collected_debts = collect_debts_section(
+                    debts,
+                    input_func,
+                    output_func,
+                    debt_collector,
+                )
+                if collected_debts == "back":
+                    step = "basics"
+                    continue
+                if collected_debts is None:
+                    return None
+                debts = collected_debts
+                nav = prompt_section_navigation(
+                    "Debts",
+                    True,
+                    input_func,
+                    output_func,
+                )
+                if nav == "cancel":
+                    return None
+                step = "basics" if nav == "back" else "bills"
+                continue
 
-        bills = collect_bills_section([], input_func, output_func, bill_collector)
-        if bills == "back":
-            return collect_budget_setup(
-                input_func,
-                output_func,
-                debt_collector,
-                bill_collector,
-                savings_strategy_collector,
-                generator,
-            )
-        if bills is None:
-            return None
-        nav = prompt_section_navigation("Recurring Bills", True, input_func, output_func)
-        if nav == "cancel":
-            return None
-        if nav == "back":
-            return collect_budget_setup(
-                input_func,
-                output_func,
-                debt_collector,
-                bill_collector,
-                savings_strategy_collector,
-                generator,
-            )
+            if step == "bills":
+                collected_bills = collect_bills_section(
+                    bills,
+                    input_func,
+                    output_func,
+                    bill_collector,
+                )
+                if collected_bills == "back":
+                    step = "debts"
+                    continue
+                if collected_bills is None:
+                    return None
+                bills = collected_bills
+                nav = prompt_section_navigation(
+                    "Recurring Bills",
+                    True,
+                    input_func,
+                    output_func,
+                )
+                if nav == "cancel":
+                    return None
+                step = "debts" if nav == "back" else "personal"
+                continue
 
-        personal = prompt_monthly_personal_spending(input_func, output_func)
-        nav = prompt_section_navigation("Personal Spending", True, input_func, output_func)
-        if nav == "cancel":
-            return None
-        if nav == "back":
-            return collect_budget_setup(
+            if step == "personal":
+                personal = prompt_monthly_personal_spending(input_func, output_func)
+                nav = prompt_section_navigation(
+                    "Personal Spending",
+                    True,
+                    input_func,
+                    output_func,
+                )
+                if nav == "cancel":
+                    return None
+                step = "bills" if nav == "back" else "savings"
+                continue
+
+            current_savings, emergency_target = prompt_savings(
+                input_func,
+                output_func,
+            )
+            savings_strategy = savings_strategy_collector(
+                input_func=input_func,
+                output_func=output_func,
+            )
+            setup = BudgetSetupResult(
+                plan_name=basics.plan_name,
+                pay_frequency=basics.pay_frequency,
+                first_paycheck_date=basics.first_paycheck_date,
+                net_paycheck_amount=basics.net_paycheck_amount,
+                debts=debts,
+                bills=bills,
+                monthly_personal_spending=personal,
+                current_savings=current_savings,
+                emergency_fund_target=emergency_target,
+                savings_strategy=savings_strategy,
+            )
+            return review_budget_setup(
+                setup,
                 input_func,
                 output_func,
                 debt_collector,
@@ -131,34 +175,7 @@ def collect_budget_setup(
                 savings_strategy_collector,
                 generator,
             )
-
-        current_savings, emergency_target = prompt_savings(input_func, output_func)
-        savings_strategy = savings_strategy_collector(
-            input_func=input_func,
-            output_func=output_func,
-        )
-        setup = BudgetSetupResult(
-            plan_name=basics.plan_name,
-            pay_frequency=basics.pay_frequency,
-            first_paycheck_date=basics.first_paycheck_date,
-            net_paycheck_amount=basics.net_paycheck_amount,
-            debts=debts,
-            bills=bills,
-            monthly_personal_spending=personal,
-            current_savings=current_savings,
-            emergency_fund_target=emergency_target,
-            savings_strategy=savings_strategy,
-        )
-        return review_budget_setup(
-            setup,
-            input_func,
-            output_func,
-            debt_collector,
-            bill_collector,
-            savings_strategy_collector,
-            generator,
-        )
-    except PlanSetupCancelled:
+    except (InputCancelled, PlanSetupCancelled):
         print_warning("Plan setup cancelled.", output_func)
         return None
 
@@ -187,6 +204,9 @@ def review_budget_setup(
         ]
         display_menu("Full Plan Review", options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Plan setup cancelled.", output_func)
+            return None
         try:
             if choice == "1":
                 try:
@@ -253,7 +273,7 @@ def review_budget_setup(
                 return None
             else:
                 print_warning("Please choose one of: 1, 2, 3, 4, 5, 6, 7.", output_func)
-        except PlanSetupCancelled:
+        except (InputCancelled, PlanSetupCancelled):
             print_warning("Edit cancelled.", output_func)
 
 
@@ -295,6 +315,7 @@ def collect_bills_section(
             input_func=input_func,
             output_func=output_func,
             initial_bills=current_bills if current_bills else None,
+            raise_on_cancel=True,
         )
         if bills is not None:
             return bills
@@ -395,6 +416,9 @@ def prompt_section_navigation(
     while True:
         display_menu(f"{title} Complete", options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Plan setup cancelled.", output_func)
+            return "cancel"
         if choice == "1":
             return "continue"
         if can_go_back and choice == "2":
@@ -422,6 +446,9 @@ def prompt_cancelled_section_action(
     while True:
         display_menu(title, options, output_func)
         choice = input_func("Choose an option: ").strip()
+        if choice.casefold() == "cancel":
+            print_warning("Plan setup cancelled.", output_func)
+            return "cancel"
         if choice == "1":
             return "retry"
         if choice == "2":

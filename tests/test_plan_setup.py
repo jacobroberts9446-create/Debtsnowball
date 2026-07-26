@@ -234,6 +234,21 @@ def test_full_cancellation_from_prompt_returns_none() -> None:
     assert "Warning: Plan setup cancelled." in output
 
 
+def test_cancel_during_debt_field_abandons_plan_setup_immediately() -> None:
+    """The shared cancellation keyword exits instead of opening another prompt."""
+    output = []
+    inputs = iter(["Plan", "2", "07/17/2026", "2000", "cancel"])
+
+    result = plan_setup.collect_plan_setup(
+        input_func=lambda _prompt: next(inputs),
+        output_func=output.append,
+    )
+
+    assert result is None
+    assert "Warning: Debt entry cancelled." in output
+    assert "Warning: Plan setup cancelled." in output
+
+
 def test_full_cancellation_after_debt_entry_cancel_returns_none() -> None:
     """Debt-entry cancellation can cancel the whole setup."""
     result, _prompts, output, _debt_calls = run_setup(

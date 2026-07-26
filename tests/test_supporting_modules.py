@@ -270,6 +270,10 @@ def test_excel_writer_creates_dashboard_tables_and_charts(tmp_path):
     assert workbook["Savings Progress"]["C3"].value == 1000
     assert workbook["Forecast"]["A1"].value == "Forecast"
     assert workbook["Forecast"]["A4"].value == "Estimated Debt-Free Date"
+    assert workbook["Forecast"]["B4"].value.date() == date(2026, 1, 16)
+    assert workbook["Forecast"]["B4"].number_format == "mmm d, yyyy"
+    assert workbook["Forecast"]["B5"].value.date() == date(2026, 1, 16)
+    assert workbook["Forecast"]["B5"].number_format == "mmm d, yyyy"
     assert workbook["Forecast"]["A14"].value == "Debt"
     assert workbook["Forecast"]["A19"].value == "Paycheck Date"
     assert workbook["Forecast"].auto_filter.ref == "A19:E21"

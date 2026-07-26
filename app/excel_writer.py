@@ -1294,18 +1294,21 @@ class ExcelWriter:
                 if cell.value is not None:
                     self._style_header_cell(cell)
 
-        currency_columns = ["B", "G", "H", "I", "J", "K", "L"]
-        date_columns = ["C", "E"]
-        integer_columns = ["D", "F"]
-        for column_letter in currency_columns:
-            for cell in sheet[column_letter][summary_header_row:]:
-                cell.number_format = "$#,##0.00"
-        for column_letter in date_columns:
-            for cell in sheet[column_letter][summary_header_row:]:
-                cell.number_format = "mmm d, yyyy"
-        for column_letter in integer_columns:
-            for cell in sheet[column_letter][summary_header_row:]:
-                cell.number_format = "0"
+        summary_data_start = summary_header_row + 1
+        summary_data_end = summary_header_row + summary_row_count
+        for column_index in [2, 7, 8, 9, 10, 11, 12]:
+            for row_index in range(summary_data_start, summary_data_end + 1):
+                sheet.cell(row=row_index, column=column_index).number_format = (
+                    "$#,##0.00"
+                )
+        for column_index in [3, 5]:
+            for row_index in range(summary_data_start, summary_data_end + 1):
+                sheet.cell(row=row_index, column=column_index).number_format = (
+                    "mmm d, yyyy"
+                )
+        for column_index in [4, 6]:
+            for row_index in range(summary_data_start, summary_data_end + 1):
+                sheet.cell(row=row_index, column=column_index).number_format = "0"
 
         for column_letter in ["D", "E", "F", "G"]:
             for cell in sheet[column_letter][deltas_header_row:payoff_header_row - 1]:
@@ -1316,13 +1319,20 @@ class ExcelWriter:
 
         for row in sheet.iter_rows(
             min_row=payoff_header_row + 1,
-            max_row=sheet.max_row,
+            max_row=chart_data_header_row - 3,
             min_col=2,
             max_col=max(payoff_column_count, 2),
         ):
             for cell in row:
                 if hasattr(cell.value, "year"):
                     cell.number_format = "mmm d, yyyy"
+
+        for row_index in range(
+            chart_data_header_row + 1,
+            chart_data_header_row + summary_row_count + 1,
+        ):
+            sheet.cell(row=row_index, column=2).number_format = "$#,##0.00"
+            sheet.cell(row=row_index, column=3).number_format = "0"
 
         sheet.column_dimensions["A"].width = 26
         for column_index, column in enumerate(sheet.columns, start=1):
@@ -1614,19 +1624,19 @@ class ExcelWriter:
                 cell.fill = header_fill
                 cell.font = header_font
 
-        for cell in sheet["A"]:
-            if cell.row > 1:
-                cell.number_format = "mmm d, yyyy"
+        debt_data_end = timeline_table_header_row - 4
+        for row_index in range(debt_table_header_row + 1, debt_data_end + 1):
+            sheet.cell(row=row_index, column=2).number_format = "$#,##0.00"
+            sheet.cell(row=row_index, column=3).number_format = "mmm d, yyyy"
+            sheet.cell(row=row_index, column=4).number_format = "$#,##0.00"
+            sheet.cell(row=row_index, column=5).number_format = "$#,##0.00"
 
-        for column_letter in ["B", "D", "E"]:
-            for cell in sheet[column_letter][1:]:
-                cell.number_format = "$#,##0.00"
-
-        for cell in sheet["C"][1:]:
-            if isinstance(cell.value, (int, float)):
-                cell.number_format = "$#,##0.00"
-            else:
-                cell.number_format = "mmm d, yyyy"
+        for row_index in range(timeline_table_header_row + 1, sheet.max_row + 1):
+            sheet.cell(row=row_index, column=1).number_format = "mmm d, yyyy"
+            for column_index in range(2, 6):
+                sheet.cell(row=row_index, column=column_index).number_format = (
+                    "$#,##0.00"
+                )
 
         for column_index, column in enumerate(sheet.columns, start=1):
             max_length = max(
